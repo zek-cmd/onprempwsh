@@ -1,0 +1,245 @@
+[
+  {
+    "Time": "2026-10-27 11:37:17",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\emolinares",
+    "Computer": "COMLAB1-PC01",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\emolinares"
+  },
+  {
+    "Time": "2026-10-27 11:37:18",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\accabero",
+    "Computer": "COMLAB1-PC04",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\accabero"
+  },
+  {
+    "Time": "2026-10-27 11:37:19",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\ebjlvillegas",
+    "Computer": "COMLAB1-PC10",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\ebjlvillegas"
+  },
+  {
+    "Time": "2026-10-27 11:37:20",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\ajtirinco",
+    "Computer": "COMLAB1-PC12",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\ajtirinco"
+  },
+  {
+    "Time": "2026-10-27 11:37:22",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\mamalegada",
+    "Computer": "COMLAB1-PC05",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\mamalegada"
+  },
+  {
+    "Time": "2026-10-27 11:37:23",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\mjmguno",
+    "Computer": "COMLAB1-PC08",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\mjmguno"
+  },
+  {
+    "Time": "2026-10-27 11:37:24",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\rjdsaldo",
+    "Computer": "COMLAB1-PC16",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\rjdsaldo"
+  },
+  {
+    "Time": "2026-10-27 11:37:25",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\agopaulinio",
+    "Computer": "COMLAB1-PC15",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\agopaulinio"
+  },
+  {
+    "Time": "2026-10-27 11:37:26",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jfduque",
+    "Computer": "COMLAB1-PC13",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jfduque"
+  },
+  {
+    "Time": "2026-10-27 11:37:28",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jbdgubatan",
+    "Computer": "COMLAB1-PC20",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jbdgubatan"
+  },
+  {
+    "Time": "2026-10-27 11:37:29",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jdglozano",
+    "Computer": "COMLAB1-PC17",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jdglozano"
+  },
+  {
+    "Time": "2026-10-27 11:37:30",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\cztmedina",
+    "Computer": "COMLAB1-PC14",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\cztmedina"
+  },
+  {
+    "Time": "2026-10-27 11:37:32",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jjlalegre",
+    "Computer": "COMLAB1-PC18",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jjlalegre"
+  },
+  {
+    "Time": "2026-10-27 11:37:33",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\xntaganna",
+    "Computer": "COMLAB1-PC21",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\xntaganna"
+  },
+  {
+    "Time": "2026-10-27 11:37:34",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\clvillafuerte",
+    "Computer": "COMLAB1-PC26",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\clvillafuerte"
+  },
+  {
+    "Time": "2026-10-27 11:37:36",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\lsmanganganang",
+    "Computer": "COMLAB1-PC22",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\lsmanganganang"
+  },
+  {
+    "Time": "2026-10-27 11:37:37",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\cmcaballero",
+    "Computer": "COMLAB1-PC24",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\cmcaballero"
+  },
+  {
+    "Time": "2026-10-27 11:37:39",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\ijpreyes",
+    "Computer": "COMLAB1-PC23",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\ijpreyes"
+  },
+  {
+    "Time": "2026-10-27 11:37:40",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\wlabre",
+    "Computer": "COMLAB1-PC27",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\wlabre"
+  },
+  {
+    "Time": "2026-10-27 11:37:41",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jmcbalingit",
+    "Computer": "COMLAB1-PC32",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jmcbalingit"
+  },
+  {
+    "Time": "2026-10-27 11:37:42",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\kpamoto",
+    "Computer": "COMLAB1-PC33",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\kpamoto"
+  },
+  {
+    "Time": "2026-10-27 11:37:44",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\bdmguerrero",
+    "Computer": "COMLAB1-PC30",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\bdmguerrero"
+  },
+  {
+    "Time": "2026-10-27 11:37:45",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\rcabe",
+    "Computer": "COMLAB1-PC40",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\rcabe"
+  },
+  {
+    "Time": "2026-10-27 11:37:47",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\rdastudillo",
+    "Computer": "COMLAB1-PC06",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\rdastudillo"
+  },
+  {
+    "Time": "2026-10-27 11:37:51",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\amgnebre",
+    "Computer": "COMLAB1-PC02",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\amgnebre"
+  },
+  {
+    "Time": "2026-10-27 11:37:54",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\jssagurit",
+    "Computer": "COMLAB1-PC11",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\jssagurit"
+  },
+  {
+    "Time": "2026-10-27 11:37:57",
+    "Operator": "Administrator",
+    "Action": "Revoke",
+    "User": "SOFT\\cnmsimbajon",
+    "Computer": "COMLAB1-PC34",
+    "Status": "OK",
+    "Detail": "Standard (no admin) | Logged on: SOFT\\cnmsimbajon"
+  }
+]

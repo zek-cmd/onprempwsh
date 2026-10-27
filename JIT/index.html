@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JIT Admin Access</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --ok: #22c55e; --warn: #eab308; --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, Segoe UI, Arial, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+  header {
+    padding: 20px 28px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+  }
+  header h1 { margin: 0; font-size: 22px; }
+  header h1 span { color: var(--accent); }
+  #server-state { font-size: 13px; color: var(--muted); }
+  main {
+    display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 20px;
+    padding: 24px 28px; max-width: 1280px; margin: 0 auto;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0;
+  }
+  .panel h2 { margin: 0 0 14px; font-size: 16px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+  input, textarea, select {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: #0b1220; color: var(--text); font-size: 14px;
+  }
+  textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; min-width: 0; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  button {
+    padding: 10px 16px; border: 0; border-radius: 8px; font-size: 14px; font-weight: 600;
+    cursor: pointer; color: #0b1220; background: var(--accent);
+  }
+  button.secondary { background: #475569; color: var(--text); }
+  button.danger { background: var(--bad); color: #fff; }
+  button.ok { background: var(--ok); color: #0b1220; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .checklist {
+    max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
+    background: #0b1220; margin-top: 8px; padding: 6px;
+  }
+  .checklist label {
+    display: flex; align-items: center; gap: 8px; margin: 0; padding: 6px 8px;
+    color: var(--text); font-size: 14px; cursor: pointer; border-radius: 6px;
+  }
+  .checklist label:hover { background: #172033; }
+  .checklist input { width: auto; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .toolbar button { padding: 6px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .table-wrap { overflow-x: auto; }
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .b-OK, .b-Online { background: rgba(34,197,94,.18); color: var(--ok); }
+  .b-Offline { background: rgba(234,179,8,.18); color: var(--warn); }
+  .b-Failed { background: rgba(239,68,68,.18); color: var(--bad); }
+  .b-Granted { background: rgba(56,189,248,.18); color: var(--accent); }
+  .b-None { background: rgba(148,163,184,.15); color: var(--muted); }
+  .empty { color: var(--muted); font-size: 14px; padding: 16px 0; }
+  #log {
+    margin-top: 16px; background: #0b1220; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; font-family: Consolas, monospace; font-size: 12px; color: var(--muted);
+    max-height: 180px; overflow: auto; white-space: pre-wrap;
+  }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button { background: #334155; color: var(--text); padding: 7px 12px; font-size: 13px; }
+  .tabs button.active { background: var(--accent); color: #0b1220; }
+</style>
+</head>
+<body>
+<header>
+  <h1>JIT <span>Admin Access</span></h1>
+  <div id="server-state">Checking server...</div>
+</header>
+
+<main>
+  <div class="stack">
+    <section class="panel">
+      <h2>1. Choose computers</h2>
+
+      <label for="ou">Organizational Unit (OU)</label>
+      <select id="ou"><option value="">Loading OUs...</option></select>
+      <div class="actions" style="margin-top:10px">
+        <button id="btn-populate" class="secondary">Populate computers</button>
+      </div>
+
+      <label>Computers in this OU</label>
+      <div class="toolbar">
+        <button id="btn-select-all" class="secondary">Select all</button>
+        <button id="btn-select-none" class="secondary">Clear</button>
+        <span id="count-label">0 selected</span>
+      </div>
+      <div id="pc-list" class="checklist"><div class="empty" style="padding:8px">No computers loaded.</div></div>
+
+      <label for="computers">Or type computer names (one per line or comma separated)</label>
+      <textarea id="computers" placeholder="PC01&#10;PC02"></textarea>
+
+      <div class="actions">
+        <button id="btn-online" class="ok">Check online PCs</button>
+      </div>
+      <p class="hint">Pings every selected computer and shows which are online.</p>
+    </section>
+
+    <section class="panel">
+      <h2>2. Grant or remove admin rights</h2>
+
+      <label for="user">Standard domain account</label>
+      <input id="user" placeholder="e.g. jdoe or CONTOSO\jdoe" autocomplete="off">
+
+      <div class="row">
+        <div>
+          <label for="minutes">Minutes</label>
+          <input id="minutes" type="number" min="1" max="1440" value="60">
+        </div>
+        <div>
+          <label for="domain">Domain (optional)</label>
+          <input id="domain" placeholder="auto-detect" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-grant">Batch grant admin</button>
+        <button id="btn-revoke" class="danger">Batch revoke</button>
+        <button id="btn-status" class="secondary">Check status</button>
+      </div>
+      <p class="hint">Grant and revoke run on every computer selected in step 1 (or typed in the box).</p>
+
+      <div id="log">Ready.</div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="panel">
+      <div class="tabs">
+        <button id="tab-results" class="active">Results</button>
+        <button id="tab-log">Session log</button>
+      </div>
+
+      <div id="view-results">
+        <div class="toolbar" style="margin:0 0 10px">
+          <button id="btn-clear-results" class="secondary">Clear all records</button>
+          <span>Clears the results shown on this page (the session log is kept).</span>
+        </div>
+        <div id="results"><p class="empty">Run an action to see results here.</p></div>
+      </div>
+
+      <div id="view-log" style="display:none">
+        <div class="toolbar" style="margin:0 0 10px">
+          <button id="btn-refresh-log" class="secondary">Refresh</button>
+          <button id="btn-clear-log" class="secondary">Clear all records</button>
+          <span>Newest first. Kept on this PC in logs\session-log.json.</span>
+        </div>
+        <div class="table-wrap"><div id="session-log"><p class="empty">Open this tab to load the log.</p></div></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const logBox = $('log');
+let ouCache = [];
+let currentOU = '';
+let onlineSet = new Set();
+
+function log(msg) {
+  const time = new Date().toLocaleTimeString();
+  logBox.textContent += `\n[${time}] ${msg}`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function api(path, body) {
+  const opts = body === undefined
+    ? { method: 'GET' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// Computers chosen in the checklist plus any typed by hand (no duplicates).
+function selectedComputers() {
+  const ticked = [...document.querySelectorAll('#pc-list input[type=checkbox]:checked')].map(c => c.value);
+  const typed = $('computers').value.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+  return [...new Set([...ticked, ...typed])];
+}
+
+function updateCount() {
+  $('count-label').textContent = `${selectedComputers().length} selected`;
+}
+
+function setBusy(busy) {
+  ['btn-grant', 'btn-status', 'btn-revoke', 'btn-online', 'btn-populate'].forEach(id => $(id).disabled = busy);
+}
+
+// ---- OUs and computers ----
+async function loadOUs() {
+  try {
+    const data = await api('/api/ous');
+    ouCache = data.ous;
+    $('ou').innerHTML = '<option value="">-- choose an OU --</option>' +
+      ouCache.map(o => `<option value="${escapeHtml(o.DN)}">${escapeHtml(o.DN)}</option>`).join('');
+    log(`Loaded ${ouCache.length} OU(s).`);
+  } catch (err) {
+    $('ou').innerHTML = '<option value="">OUs unavailable</option>';
+    log('OU list error: ' + err.message);
+  }
+}
+
+async function populateComputers() {
+  const dn = $('ou').value;
+  if (!dn) return log('Choose an OU first.');
+  setBusy(true);
+  log(`Loading computers in ${dn} ...`);
+  try {
+    const data = await api('/api/computers', { ou: dn });
+    currentOU = dn;
+    onlineSet = new Set();
+    const list = data.computers;
+    $('pc-list').innerHTML = list.length === 0
+      ? '<div class="empty" style="padding:8px">No computers in this OU.</div>'
+      : list.map(n => `<label><input type="checkbox" value="${escapeHtml(n)}" checked> ${escapeHtml(n)}</label>`).join('');
+    updateCount();
+    log(`${list.length} computer(s) loaded from the OU and all selected.`);
+  } catch (err) {
+    log('Populate error: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+$('ou').addEventListener('change', () => { $('pc-list').innerHTML = '<div class="empty" style="padding:8px">Click Populate computers.</div>'; updateCount(); });
+$('btn-populate').addEventListener('click', populateComputers);
+$('btn-select-all').addEventListener('click', () => {
+  document.querySelectorAll('#pc-list input[type=checkbox]').forEach(c => c.checked = true);
+  updateCount();
+});
+$('btn-select-none').addEventListener('click', () => {
+  document.querySelectorAll('#pc-list input[type=checkbox]').forEach(c => c.checked = false);
+  $('computers').value = '';
+  updateCount();
+});
+$('pc-list').addEventListener('change', updateCount);
+$('computers').addEventListener('input', updateCount);
+
+// ---- online check ----
+async function checkOnline() {
+  const list = selectedComputers();
+  if (list.length === 0) return log('Select or type at least one computer.');
+  setBusy(true);
+  log(`Pinging ${list.length} computer(s) ...`);
+  try {
+    const data = await api('/api/ping', { computers: list });
+    onlineSet = new Set(data.results.filter(r => r.Online).map(r => r.Computer));
+    const rows = data.results.map(r => `<tr>
+        <td>${escapeHtml(r.Computer)}</td>
+        <td><span class="badge b-${r.Online ? 'Online' : 'Offline'}">${r.Online ? 'Online' : 'Offline'}</span></td>
+      </tr>`).join('');
+    $('results').innerHTML = `<table><thead><tr><th>Computer</th><th>Ping</th></tr></thead><tbody>${rows}</tbody></table>`;
+    log(`${onlineSet.size} of ${list.length} computer(s) online.`);
+  } catch (err) {
+    log('Online check error: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+$('btn-online').addEventListener('click', checkOnline);
+
+// ---- grant / revoke / status (batch) ----
+function readForm() {
+  return {
+    user: $('user').value.trim(),
+    computers: selectedComputers(),
+    minutes: parseInt($('minutes').value, 10) || 60,
+    domain: $('domain').value.trim()
+  };
+}
+
+function renderResults(results) {
+  if (!results || results.length === 0) {
+    $('results').innerHTML = '<p class="empty">No results.</p>';
+    return;
+  }
+  const rows = results.map(r => {
+    const granted = r.Detail && r.Detail.Granted === true;
+    const expires = r.Detail && r.Detail.ExpiresAt ? escapeHtml(r.Detail.ExpiresAt) : '-';
+    const loggedOn = r.Detail && r.Detail.LoggedOnUser ? escapeHtml(r.Detail.LoggedOnUser) : '-';
+    const session = r.Detail && r.Detail.SessionTask
+      ? '<span class="badge b-Granted">Task set</span>' : '<span class="badge b-None">None</span>';
+    const state = r.Status === 'OK'
+      ? (granted ? '<span class="badge b-Granted">Admin</span>' : '<span class="badge b-None">Standard</span>')
+      : '-';
+    const detail = r.Status === 'OK' ? expires : escapeHtml(r.Detail || '');
+    return `<tr>
+      <td>${escapeHtml(r.Computer)}</td>
+      <td><span class="badge b-${escapeHtml(r.Status)}">${escapeHtml(r.Status)}</span></td>
+      <td>${loggedOn}</td>
+      <td>${state}</td>
+      <td>${session}</td>
+      <td>${detail}</td>
+    </tr>`;
+  }).join('');
+  $('results').innerHTML = `<table>
+    <thead><tr><th>Computer</th><th>Status</th><th>Logged on</th><th>Access</th><th>Session</th><th>Expires / Detail</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+async function runAction(action) {
+  const form = readForm();
+  if (form.computers.length === 0) return log('Select or type at least one computer.');
+
+  setBusy(true);
+  try {
+    // 1. Ask every selected PC who is logged on (dynamic detection).
+    log(`Detecting logged-on users on ${form.computers.length} computer(s) ...`);
+    const det = await api('/api/detect', { computers: form.computers });
+    const found = det.results.filter(r => r.Status === 'OK' && r.User);
+    const none = det.results.filter(r => r.Status !== 'OK' || !r.User);
+
+    // 2. Group PCs by the account found on them.
+    const groups = new Map();
+    for (const r of found) {
+      if (!groups.has(r.User)) groups.set(r.User, []);
+      groups.get(r.User).push(r.Computer);
+    }
+    if (groups.size === 0) {
+      renderResults(det.results.map(r => ({ Computer: r.Computer, Status: r.Status === 'Failed' ? 'Failed' : 'Skipped',
+        Detail: r.Status === 'Failed' ? 'WinRM failed' : 'No user logged on' })));
+      return log('No logged-on users found, nothing to do.');
+    }
+
+    const summary = [...groups].map(([u, pcs]) => `${u} (${pcs.length} PC)`).join(', ');
+    if (action === 'Revoke' && !confirm(`Remove admin rights from these logged-on users?\n${summary}`)) {
+      return log('Batch revoke cancelled.');
+    }
+    log(`Found: ${summary}. ${none.length} PC(s) with no user skipped.`);
+
+    // 3. Run the action once per account, on that account's PCs.
+    let all = [];
+    for (const [user, pcs] of groups) {
+      log(`${action} for ${user} on ${pcs.length} computer(s) ...`);
+      const data = await api('/api/jit', { action, user, computers: pcs, minutes: form.minutes, domain: form.domain });
+      all = all.concat(data.results);
+    }
+    // Show PCs that had no user as skipped rows.
+    const skipped = none.map(r => ({ Computer: r.Computer, Status: r.Status === 'Failed' ? 'Failed' : 'Skipped',
+      Detail: r.Status === 'Failed' ? 'WinRM failed' : 'No user logged on' }));
+    renderResults(all.concat(skipped));
+    log(`${action} finished. ${all.length} computer(s) handled, ${skipped.length} skipped.`);
+    if ($('view-log').style.display !== 'none') loadLog();
+  } catch (err) {
+    log('Error: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+$('btn-grant').addEventListener('click', () => runAction('Grant'));
+$('btn-status').addEventListener('click', () => runAction('Status'));
+$('btn-revoke').addEventListener('click', () => runAction('Revoke'));
+
+// ---- session log table ----
+async function loadLog() {
+  try {
+    const data = await api('/api/log');
+    if (data.entries.length === 0) {
+      $('session-log').innerHTML = '<p class="empty">No actions logged yet.</p>';
+      return;
+    }
+    const rows = [...data.entries].reverse().map(e => `<tr>
+        <td>${escapeHtml(e.Time)}</td>
+        <td>${escapeHtml(e.Operator)}</td>
+        <td>${escapeHtml(e.Action)}</td>
+        <td>${escapeHtml(e.User)}</td>
+        <td>${escapeHtml(e.Computer)}</td>
+        <td><span class="badge b-${escapeHtml(e.Status)}">${escapeHtml(e.Status)}</span></td>
+        <td>${escapeHtml(e.Detail)}</td>
+      </tr>`).join('');
+    $('session-log').innerHTML = `<table>
+      <thead><tr><th>Time</th><th>Operator</th><th>Action</th><th>User</th><th>Computer</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch (err) {
+    log('Log error: ' + err.message);
+  }
+}
+
+function showTab(which) {
+  const results = which === 'results';
+  $('view-results').style.display = results ? '' : 'none';
+  $('view-log').style.display = results ? 'none' : '';
+  $('tab-results').classList.toggle('active', results);
+  $('tab-log').classList.toggle('active', !results);
+  if (!results) loadLog();
+}
+$('tab-results').addEventListener('click', () => showTab('results'));
+$('tab-log').addEventListener('click', () => showTab('log'));
+$('btn-refresh-log').addEventListener('click', loadLog);
+
+// Clear all records in the session log (the saved file on this PC).
+$('btn-clear-log').addEventListener('click', async () => {
+  if (!confirm('Delete ALL session log records? This cannot be undone.')) return;
+  try {
+    await api('/api/log/clear', {});
+    log('Session log cleared.');
+    loadLog();
+  } catch (err) {
+    log('Clear log error: ' + err.message);
+  }
+});
+
+// Clear the results table shown on the page (does not touch the log).
+$('btn-clear-results').addEventListener('click', () => {
+  if (!confirm('Clear all results on this page?')) return;
+  onlineSet = new Set();
+  $('results').innerHTML = '<p class="empty">Run an action to see results here.</p>';
+  log('Results cleared.');
+});
+
+// ---- server status ----
+async function checkServer() {
+  try {
+    const data = await api('/api/health');
+    $('server-state').textContent = `Server online - ${data.host} - port 40000` + (data.ad ? '' : ' - ActiveDirectory module missing');
+    $('server-state').style.color = '#22c55e';
+  } catch {
+    $('server-state').textContent = 'Server offline';
+    $('server-state').style.color = '#ef4444';
+  }
+}
+
+checkServer();
+loadOUs();
+</script>
+</body>
+</html>
