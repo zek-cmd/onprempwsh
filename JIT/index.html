@@ -16,7 +16,7 @@
     background: var(--bg); color: var(--text); min-height: 100vh;
   }
   header {
-    padding: 20px 28px; border-bottom: 1px solid var(--line);
+    padding: 20px 5vw; border-bottom: 1px solid var(--line);
     display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
   }
   header h1 { margin: 0; font-size: 22px; }
@@ -24,7 +24,7 @@
   #server-state { font-size: 13px; color: var(--muted); }
   main {
     display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 20px;
-    padding: 24px 28px; max-width: 1280px; margin: 0 auto;
+    padding: 24px 0; width: 90vw; margin: 0 auto;
   }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
@@ -84,6 +84,8 @@
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
   .tabs button { background: #334155; color: var(--text); padding: 7px 12px; font-size: 13px; }
   .tabs button.active { background: var(--accent); color: #0b1220; }
+  .pager { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: var(--muted); }
+  .pager button { padding: 6px 12px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -182,6 +184,43 @@ let ouCache = [];
 let currentOU = '';
 let onlineSet = new Set();
 
+// ---- paging (rows per page for results and session log) ----
+const PAGE_SIZE = 10;
+let resultsView = { header: '', items: [], row: null, page: 1 };
+let logView = { items: [], page: 1 };
+
+function pageSlice(items, page) {
+  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const p = Math.min(Math.max(1, page), pages);
+  return { pages, page: p, items: items.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE) };
+}
+
+function pagerHtml(name, page, pages, total) {
+  if (pages <= 1) return '';
+  return `<div class="pager">
+    <button class="secondary" ${page <= 1 ? 'disabled' : ''} onclick="gotoPage('${name}', ${page - 1})">Previous</button>
+    <span>Page ${page} of ${pages} (${total} rows)</span>
+    <button class="secondary" ${page >= pages ? 'disabled' : ''} onclick="gotoPage('${name}', ${page + 1})">Next</button>
+  </div>`;
+}
+
+function gotoPage(name, page) {
+  if (name === 'results') { resultsView.page = page; drawResults(); }
+  else { logView.page = page; drawLog(); }
+}
+
+function drawResults() {
+  if (resultsView.items.length === 0) {
+    $('results').innerHTML = '<p class="empty">No results.</p>';
+    return;
+  }
+  const s = pageSlice(resultsView.items, resultsView.page);
+  resultsView.page = s.page;
+  const rows = s.items.map(resultsView.row).join('');
+  $('results').innerHTML = `<table><thead><tr>${resultsView.header}</tr></thead><tbody>${rows}</tbody></table>`
+    + pagerHtml('results', s.page, s.pages, resultsView.items.length);
+}
+
 function log(msg) {
   const time = new Date().toLocaleTimeString();
   logBox.textContent += `\n[${time}] ${msg}`;
@@ -276,11 +315,16 @@ async function checkOnline() {
   try {
     const data = await api('/api/ping', { computers: list });
     onlineSet = new Set(data.results.filter(r => r.Online).map(r => r.Computer));
-    const rows = data.results.map(r => `<tr>
+    resultsView = {
+      header: '<th>Computer</th><th>Ping</th>',
+      items: data.results,
+      row: r => `<tr>
         <td>${escapeHtml(r.Computer)}</td>
         <td><span class="badge b-${r.Online ? 'Online' : 'Offline'}">${r.Online ? 'Online' : 'Offline'}</span></td>
-      </tr>`).join('');
-    $('results').innerHTML = `<table><thead><tr><th>Computer</th><th>Ping</th></tr></thead><tbody>${rows}</tbody></table>`;
+      </tr>`,
+      page: 1
+    };
+    drawResults();
     log(`${onlineSet.size} of ${list.length} computer(s) online.`);
   } catch (err) {
     log('Online check error: ' + err.message);
@@ -300,22 +344,17 @@ function readForm() {
   };
 }
 
-function renderResults(results) {
-  if (!results || results.length === 0) {
-    $('results').innerHTML = '<p class="empty">No results.</p>';
-    return;
-  }
-  const rows = results.map(r => {
-    const granted = r.Detail && r.Detail.Granted === true;
-    const expires = r.Detail && r.Detail.ExpiresAt ? escapeHtml(r.Detail.ExpiresAt) : '-';
-    const loggedOn = r.Detail && r.Detail.LoggedOnUser ? escapeHtml(r.Detail.LoggedOnUser) : '-';
-    const session = r.Detail && r.Detail.SessionTask
-      ? '<span class="badge b-Granted">Task set</span>' : '<span class="badge b-None">None</span>';
-    const state = r.Status === 'OK'
-      ? (granted ? '<span class="badge b-Granted">Admin</span>' : '<span class="badge b-None">Standard</span>')
-      : '-';
-    const detail = r.Status === 'OK' ? expires : escapeHtml(r.Detail || '');
-    return `<tr>
+function resultRow(r) {
+  const granted = r.Detail && r.Detail.Granted === true;
+  const expires = r.Detail && r.Detail.ExpiresAt ? escapeHtml(r.Detail.ExpiresAt) : '-';
+  const loggedOn = r.Detail && r.Detail.LoggedOnUser ? escapeHtml(r.Detail.LoggedOnUser) : '-';
+  const session = r.Detail && r.Detail.SessionTask
+    ? '<span class="badge b-Granted">Task set</span>' : '<span class="badge b-None">None</span>';
+  const state = r.Status === 'OK'
+    ? (granted ? '<span class="badge b-Granted">Admin</span>' : '<span class="badge b-None">Standard</span>')
+    : '-';
+  const detail = r.Status === 'OK' ? expires : escapeHtml(r.Detail || '');
+  return `<tr>
       <td>${escapeHtml(r.Computer)}</td>
       <td><span class="badge b-${escapeHtml(r.Status)}">${escapeHtml(r.Status)}</span></td>
       <td>${loggedOn}</td>
@@ -323,10 +362,14 @@ function renderResults(results) {
       <td>${session}</td>
       <td>${detail}</td>
     </tr>`;
-  }).join('');
-  $('results').innerHTML = `<table>
-    <thead><tr><th>Computer</th><th>Status</th><th>Logged on</th><th>Access</th><th>Session</th><th>Expires / Detail</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+}
+
+function renderResults(results) {
+  resultsView = {
+    header: '<th>Computer</th><th>Status</th><th>Logged on</th><th>Access</th><th>Session</th><th>Expires / Detail</th>',
+    items: results || [], row: resultRow, page: 1
+  };
+  drawResults();
 }
 
 async function runAction(action) {
@@ -363,8 +406,15 @@ async function runAction(action) {
     let all = [];
     for (const [user, pcs] of groups) {
       log(`${action} for ${user} on ${pcs.length} computer(s) ...`);
-      const data = await api('/api/jit', { action, user, computers: pcs, minutes: form.minutes, domain: form.domain });
-      all = all.concat(data.results);
+      const start = await api('/api/jit', { action, user, computers: pcs, minutes: form.minutes, domain: form.domain });
+      // The server works in the background; check its progress until it is finished.
+      let job;
+      do {
+        await new Promise(r => setTimeout(r, 1500));
+        job = await api('/api/job?id=' + encodeURIComponent(start.jobId));
+      } while (job.status === 'running');
+      if (job.status === 'error') throw new Error(job.error);
+      all = all.concat(job.results);
     }
     // Show PCs that had no user as skipped rows.
     const skipped = none.map(r => ({ Computer: r.Computer, Status: r.Status === 'Failed' ? 'Failed' : 'Skipped',
@@ -387,11 +437,21 @@ $('btn-revoke').addEventListener('click', () => runAction('Revoke'));
 async function loadLog() {
   try {
     const data = await api('/api/log');
-    if (data.entries.length === 0) {
-      $('session-log').innerHTML = '<p class="empty">No actions logged yet.</p>';
-      return;
-    }
-    const rows = [...data.entries].reverse().map(e => `<tr>
+    logView = { items: [...data.entries].reverse(), page: logView.page };
+    drawLog();
+  } catch (err) {
+    log('Log error: ' + err.message);
+  }
+}
+
+function drawLog() {
+  if (logView.items.length === 0) {
+    $('session-log').innerHTML = '<p class="empty">No actions logged yet.</p>';
+    return;
+  }
+  const s = pageSlice(logView.items, logView.page);
+  logView.page = s.page;
+  const rows = s.items.map(e => `<tr>
         <td>${escapeHtml(e.Time)}</td>
         <td>${escapeHtml(e.Operator)}</td>
         <td>${escapeHtml(e.Action)}</td>
@@ -400,12 +460,10 @@ async function loadLog() {
         <td><span class="badge b-${escapeHtml(e.Status)}">${escapeHtml(e.Status)}</span></td>
         <td>${escapeHtml(e.Detail)}</td>
       </tr>`).join('');
-    $('session-log').innerHTML = `<table>
+  $('session-log').innerHTML = `<table>
       <thead><tr><th>Time</th><th>Operator</th><th>Action</th><th>User</th><th>Computer</th><th>Status</th><th>Detail</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
-  } catch (err) {
-    log('Log error: ' + err.message);
-  }
+      <tbody>${rows}</tbody></table>`
+    + pagerHtml('log', s.page, s.pages, logView.items.length);
 }
 
 function showTab(which) {
@@ -436,6 +494,7 @@ $('btn-clear-log').addEventListener('click', async () => {
 $('btn-clear-results').addEventListener('click', () => {
   if (!confirm('Clear all results on this page?')) return;
   onlineSet = new Set();
+  resultsView = { header: '', items: [], row: null, page: 1 };
   $('results').innerHTML = '<p class="empty">Run an action to see results here.</p>';
   log('Results cleared.');
 });

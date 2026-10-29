@@ -9,7 +9,8 @@
       GET  /api/ous          list of OUs in the domain
       POST /api/computers    computers inside a chosen OU
       POST /api/ping         which computers are online
-      POST /api/jit          Grant / Revoke / Status (built into this script)
+      POST /api/jit          Starts Grant / Revoke / Status in the background, returns a jobId
+      GET  /api/job?id=...   Job progress and results (page polls this)
       GET  /api/log          session log (table)
     Every grant, revoke and status action is written to logs\session-log.json.
     Listens on localhost only, so other PCs cannot reach it.
@@ -285,6 +286,56 @@ function Test-ComputersOnline {
     } -ThrottleLimit 32
 }
 
+# Background jobs: each batch runs in its own runspace (a separate thread), so the
+# web server loop stays free to answer other clicks while it works.
+$jobs = @{}
+
+function Start-JITJob {
+    param([hashtable]$Params)
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+    foreach ($fn in @('Invoke-JIT', 'Add-SessionLog', 'Read-SessionLog')) {
+        $body = (Get-Item -LiteralPath "function:$fn").ScriptBlock.ToString()
+        $iss.Commands.Add([System.Management.Automation.Runspaces.SessionStateFunctionEntry]::new($fn, $body))
+    }
+    $vars = @{ remoteGrant = $remoteGrant; remoteRevoke = $remoteRevoke; remoteStatus = $remoteStatus; logFile = $logFile }
+    foreach ($name in $vars.Keys) {
+        $iss.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new($name, $vars[$name], ''))
+    }
+
+    $rs = [runspacefactory]::CreateRunspace($iss)
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript('param($p) Invoke-JIT @p').AddArgument($Params)
+    $handle = $ps.BeginInvoke()
+
+    [pscustomobject]@{
+        Handle   = $handle
+        PS       = $ps
+        Runspace = $rs
+        Action   = [string]$Params.Action
+        User     = [string]$Params.User
+        Status   = 'running'
+        Results  = @()
+        Error    = ''
+    }
+}
+
+function Update-JITJob {
+    param($Job)
+    if ($Job.Status -ne 'running' -or -not $Job.Handle.IsCompleted) { return }
+    try {
+        $Job.Results = @($Job.PS.EndInvoke($Job.Handle))
+        $Job.Status  = 'done'
+    }
+    catch {
+        $Job.Error  = $_.Exception.Message
+        $Job.Status = 'error'
+    }
+    $Job.PS.Dispose()
+    $Job.Runspace.Dispose()
+}
+
 try {
     while ($listener.IsListening) {
         $ctx  = $listener.GetContext()
@@ -335,21 +386,41 @@ try {
                 if ($payload.minutes) { $params.Minutes = [int]$payload.minutes }
                 if ($payload.domain)  { $params.Domain  = [string]$payload.domain }
 
-                $results = @(Invoke-JIT @params)
-
-                foreach ($r in $results) {
-                    $detail = if ($r.Status -eq 'OK') {
-                        if ($r.Detail.Granted) { "Granted until $($r.Detail.ExpiresAt)" } else { 'Standard (no admin)' }
-                    } else { [string]$r.Detail }
-                    if ($r.Status -eq 'OK' -and $r.Detail.LoggedOnUser) {
-                        $detail += " | Logged on: $($r.Detail.LoggedOnUser)"
-                    }
-                    Add-SessionLog -Action $params.Action -User $params.User -Computer $r.Computer `
-                                   -Status $r.Status -Detail $detail
+                $jobId = [guid]::NewGuid().ToString('N')
+                $jobs[$jobId] = Start-JITJob -Params $params
+                Send-Response $res 200 ([pscustomobject]@{ jobId = $jobId } | ConvertTo-Json -Compress)
+            }
+            elseif ($req.HttpMethod -eq 'GET' -and $path -eq '/api/job') {
+                $id = [string]$req.QueryString['id']
+                if (-not $jobs.ContainsKey($id)) {
+                    Send-Response $res 404 '{"error":"Unknown job"}'
                 }
-
-                $body = [pscustomobject]@{ results = $results } | ConvertTo-Json -Depth 6 -Compress
-                Send-Response $res 200 $body
+                else {
+                    $job = $jobs[$id]
+                    Update-JITJob $job
+                    if ($job.Status -eq 'running') {
+                        Send-Response $res 200 ([pscustomobject]@{ status = 'running' } | ConvertTo-Json -Compress)
+                    }
+                    elseif ($job.Status -eq 'error') {
+                        $jobs.Remove($id)
+                        Send-Response $res 200 ([pscustomobject]@{ status = 'error'; error = $job.Error } | ConvertTo-Json -Compress)
+                    }
+                    else {
+                        # Write the session log here, on the main thread, one entry per computer.
+                        foreach ($r in $job.Results) {
+                            $detail = if ($r.Status -eq 'OK') {
+                                if ($r.Detail.Granted) { "Granted until $($r.Detail.ExpiresAt)" } else { 'Standard (no admin)' }
+                            } else { [string]$r.Detail }
+                            if ($r.Status -eq 'OK' -and $r.Detail.LoggedOnUser) {
+                                $detail += " | Logged on: $($r.Detail.LoggedOnUser)"
+                            }
+                            Add-SessionLog -Action $job.Action -User $job.User -Computer $r.Computer -Status $r.Status -Detail $detail
+                        }
+                        $jobs.Remove($id)
+                        $body = [pscustomobject]@{ status = 'done'; results = @($job.Results) } | ConvertTo-Json -Depth 6 -Compress
+                        Send-Response $res 200 $body
+                    }
+                }
             }
             elseif ($req.HttpMethod -eq 'GET' -and $path -eq '/api/log') {
                 $entries = @(Read-SessionLog | Select-Object -Last 200)
