@@ -108,22 +108,29 @@ if ($computers.Count -eq 0) {
 Write-Host "Testing connectivity for $($computers.Count) computers..." -ForegroundColor Cyan
 Write-Host "This may take a moment..." -ForegroundColor Gray
 
-# Test online status
+# Test online status (PowerShell 7: all pings run in parallel, up to 50 at once)
+$pingResults = $computers | ForEach-Object -Parallel {
+    $computerName = if ($_.DNSHostName) { $_.DNSHostName } else { $_.Name }
+    $isOnline = Test-Connection -TargetName $computerName -Count 1 -Quiet -TimeoutSeconds 2 -ErrorAction SilentlyContinue
+    [PSCustomObject]@{
+        Name = $_.Name
+        FQDN = $computerName
+        OperatingSystem = $_.OperatingSystem
+        Online = [bool]$isOnline
+    }
+} -ThrottleLimit 50
+
+# Show the results in name order
 $onlineComputers = @()
 $offlineCount = 0
-
-foreach ($computer in $computers) {
-    $computerName = if ($computer.DNSHostName) { $computer.DNSHostName } else { $computer.Name }
-    Write-Host "  Testing $($computer.Name)... " -NoNewline
-    
-    $isOnline = Test-Connection -ComputerName $computerName -Count 1 -Quiet -ErrorAction SilentlyContinue
-    
-    if ($isOnline) {
+foreach ($result in ($pingResults | Sort-Object Name)) {
+    Write-Host "  Testing $($result.Name)... " -NoNewline
+    if ($result.Online) {
         Write-Host "ONLINE" -ForegroundColor Green
         $onlineComputers += [PSCustomObject]@{
-            Name = $computer.Name
-            FQDN = $computerName
-            OperatingSystem = $computer.OperatingSystem
+            Name = $result.Name
+            FQDN = $result.FQDN
+            OperatingSystem = $result.OperatingSystem
         }
     } else {
         Write-Host "OFFLINE" -ForegroundColor Red
