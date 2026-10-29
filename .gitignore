@@ -9,3 +9,7 @@
 
 # Keep this .gitignore file itself
 !.gitignore
+
+# Keep the JIT page
+!JIT/
+!JIT/index.html
