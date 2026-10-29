@@ -1,0 +1,11 @@
+# Ignore every file by default
+*
+
+# Keep folders visible so their .ps1 files can be found
+!*/
+
+# Keep PowerShell scripts
+!*.ps1
+
+# Keep this .gitignore file itself
+!.gitignore
