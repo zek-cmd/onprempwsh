@@ -10,6 +10,11 @@ A set of PowerShell scripts for managing an on-premises Windows Active Directory
 
 ## Scripts
 
+### Start here
+| Script | What it does |
+|---|---|
+| `menu.ps1` | Numbered menu that lists every script in this folder, explains what it does and how risky it is, then asks y/n before starting it. Run ``.\menu.ps1 -WhatIf`` to run the scripts that support it in their own preview mode - the y/n question is still asked first. |
+
 ### User accounts
 | Script | What it does |
 |---|---|
@@ -33,6 +38,7 @@ A set of PowerShell scripts for managing an on-premises Windows Active Directory
 | Script | What it does |
 |---|---|
 | `INACTIVITY.ps1` | Finds inactive accounts and their redirected folders, writes a CSV report, and can optionally move or delete them in an interactive grid. |
+| `Find-Duplicate-AD-Names.ps1` | Read-only scan for duplicate, reordered and similar (close) display names. Saves a CSV report and shows the result in a grid. |
 | `folderbased/` | Folder redirection and lookup helpers, plus a DFS namespace setup in `folderbased/DFS_script/`. |
 
 ### Software and computers
@@ -47,7 +53,7 @@ A set of PowerShell scripts for managing an on-premises Windows Active Directory
 
 1. Open PowerShell as Administrator on a machine that can reach the domain controller.
 2. Go to the scripts folder: `cd path\to\onprempwsh`
-3. Run the script you need, for example `.\USERCREATE.ps1`.
+3. Run the script you need, for example `.\USERCREATE.ps1` - or open the menu with `.\menu.ps1` and pick it from the list.
 4. Follow the dialog boxes or prompts.
 
 Read the header comments at the top of each script before running it. Some scripts change or delete data in AD.
