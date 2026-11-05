@@ -4,6 +4,9 @@
 # Keep folders visible so their .ps1 files can be found
 !*/
 
+# Ignore the app's own settings folder
+.hormachuelos/
+
 # Keep PowerShell scripts
 !*.ps1
 
