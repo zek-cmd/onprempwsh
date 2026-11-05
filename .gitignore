@@ -17,6 +17,5 @@
 !JIT/
 !JIT/index.html
 
-# Keep the session log
-!JIT/logs/
-!JIT/logs/session-log.json
+# Ignore the session log (never goes to the repo)
+JIT/logs/session-log.json
