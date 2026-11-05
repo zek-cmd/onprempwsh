@@ -7,7 +7,7 @@ Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 # Configuration
-$NewPassword = "password"
+$NewPassword = "P@ssw0rd"
 
 # Function to get domain configuration from environment variables
 function Get-CurrentDomainInfo {
@@ -498,12 +498,20 @@ function Main {
     Write-Host "Default password: $NewPassword" -ForegroundColor Yellow
     $useCustomPassword = Read-Host "Do you want to use a different password? (Y/N)"
     
+    # Answer N/n/false (or anything else) uses the default password.
     $resetPassword = $NewPassword
-    if ($useCustomPassword -eq 'Y' -or $useCustomPassword -eq 'y') {
-        $customPassword = Read-Host "Enter the new password"
+    if ($useCustomPassword -eq 'Y' -or $useCustomPassword -eq 'y' -or $useCustomPassword -eq 'true') {
+        $customPassword = Read-Host "Enter the new password (press Enter to keep the default)"
         if (-not [string]::IsNullOrWhiteSpace($customPassword)) {
             $resetPassword = $customPassword
         }
+        else {
+            Write-Host "Nothing entered - using the default password: $NewPassword" -ForegroundColor Yellow
+            $resetPassword = $NewPassword
+        }
+    }
+    else {
+        Write-Host "Using the default password: $NewPassword" -ForegroundColor Yellow
     }
     
     # Step 4: Show summary

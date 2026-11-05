@@ -1,6 +1,6 @@
 # Active Directory Password Reset Script (CSV-Based)
-# Reset passwords for users listed in names.csv (FullName + StudNo columns)
-# Uses StudNo as the username for AD lookup
+# Reset passwords for users listed in names.csv (FullName column)
+# Looks users up in AD by FullName (Display Name)
 # Script compatibility verified for PowerShell 5.1+
 
 # Import required assemblies for dialog boxes
@@ -8,7 +8,7 @@ Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 # Configuration
-$NewPassword = "password"
+$NewPassword = "P@ssw0rd"
 
 # Function to get domain configuration from environment variables
 function Get-CurrentDomainInfo {
@@ -115,7 +115,7 @@ function Get-ResultsSavePath {
     }
 }
 
-# Function to read entries from CSV file (FullName + StudNo columns)
+# Function to read entries from CSV file (FullName column)
 function Read-NamesFromCSV {
     param([string]$FilePath)
     
@@ -142,25 +142,17 @@ function Read-NamesFromCSV {
             return @()
         }
         
-        if ($columns -notcontains 'StudNo') {
-            Write-Error "CSV file does not contain a 'StudNo' column."
-            Write-Host "Available columns: $($columns -join ', ')" -ForegroundColor Yellow
-            return @()
-        }
-        
         $entries = @()
         foreach ($row in $csvData) {
             $fullName = $row.FullName.Trim()
-            $studNo = $row.StudNo.Trim()
             
-            if (-not [string]::IsNullOrWhiteSpace($studNo)) {
+            if (-not [string]::IsNullOrWhiteSpace($fullName)) {
                 $entries += [PSCustomObject]@{
                     FullName = $fullName
-                    StudNo   = $studNo
                 }
             }
             else {
-                Write-Warning "Row has empty StudNo. Skipping."
+                Write-Warning "Row has empty FullName. Skipping."
             }
         }
         
@@ -173,11 +165,10 @@ function Read-NamesFromCSV {
     }
 }
 
-# Function to reset password for an AD user (looked up by StudNo as username)
+# Function to reset password for an AD user (looked up by FullName)
 function Reset-ADUserPassword {
     param(
         [string]$FullName,
-        [string]$StudNo,
         [string]$Password
     )
     
@@ -190,36 +181,46 @@ function Reset-ADUserPassword {
         }
     }
     
-    $Username = $StudNo.Trim()
-    
-    if ([string]::IsNullOrWhiteSpace($Username)) {
-        Write-Error "Student number is empty for: $FullName"
+    if ([string]::IsNullOrWhiteSpace($FullName)) {
+        Write-Error "Full name is empty."
         return @{
             Status = "Failed"
-            Message = "Student number is empty"
+            Message = "Full name is empty"
             Username = ""
         }
     }
     
     Write-Host "`nLooking up user: $FullName" -ForegroundColor White
-    Write-Host "  StudNo / Username: $Username" -ForegroundColor Gray
     
     $adUser = $null
+    $adMatches = @()
     try {
-        $adUser = Get-ADUser -Identity $Username -Properties DistinguishedName, Name, SamAccountName, PasswordLastSet, Enabled
+        $escapedName = $FullName.Trim() -replace "'", "''"
+        $adMatches = @(Get-ADUser -Filter "Name -eq '$escapedName'" -Properties DistinguishedName, Name, SamAccountName, PasswordLastSet, Enabled)
     }
     catch {
-        # User not found by StudNo
+        $adMatches = @()
     }
     
-    if (-not $adUser) {
-        Write-Host "  ERROR: User with StudNo '$Username' not found in Active Directory." -ForegroundColor Red
+    if ($adMatches.Count -eq 0) {
+        Write-Host "  ERROR: User '$FullName' not found in Active Directory." -ForegroundColor Red
         return @{
             Status = "Failed"
             Message = "User not found in AD"
-            Username = $Username
+            Username = ""
         }
     }
+    
+    if ($adMatches.Count -gt 1) {
+        Write-Host "  ERROR: Found $($adMatches.Count) AD users named '$FullName'. Skipping to avoid resetting the wrong account." -ForegroundColor Red
+        return @{
+            Status = "Failed"
+            Message = "Multiple AD users match this name"
+            Username = ($adMatches | ForEach-Object { $_.SamAccountName }) -join ', '
+        }
+    }
+    
+    $adUser = $adMatches[0]
     
     Write-Host "  Found user: $($adUser.Name)" -ForegroundColor Green
     Write-Host "  Username: $($adUser.SamAccountName)" -ForegroundColor Gray
@@ -274,9 +275,9 @@ function Show-Summary {
     Write-Host "Number of users to process: $($Entries.Count)" -ForegroundColor Yellow
     Write-Host "New Password: $Password" -ForegroundColor Yellow
     Write-Host "Domain: $Domain" -ForegroundColor Yellow
-    Write-Host "Lookup Method: StudNo as username" -ForegroundColor Yellow
+    Write-Host "Lookup Method: FullName (Display Name)" -ForegroundColor Yellow
     
-    Write-Host "`n--- FullName -> StudNo ---" -ForegroundColor White
+    Write-Host "`n--- Users ---" -ForegroundColor White
     
     $maxNameLength = 0
     foreach ($entry in $Entries) {
@@ -288,7 +289,7 @@ function Show-Summary {
     
     foreach ($entry in $Entries) {
         $paddedName = $entry.FullName.PadRight($maxNameLength)
-        Write-Host "$paddedName -> $($entry.StudNo)" -ForegroundColor Gray
+        Write-Host "$paddedName" -ForegroundColor Gray
     }
     
     Write-Host "`n=================================" -ForegroundColor Cyan
@@ -300,8 +301,8 @@ function Main {
     
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host "     ACTIVE DIRECTORY PASSWORD RESET TOOL" -ForegroundColor Cyan
-    Write-Host "     (CSV-Based: FullName + StudNo columns)" -ForegroundColor Cyan
-    Write-Host "     (Lookup by StudNo as username)" -ForegroundColor Cyan
+    Write-Host "     (CSV-Based: FullName column)" -ForegroundColor Cyan
+    Write-Host "     (Lookup by FullName)" -ForegroundColor Cyan
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
     
@@ -327,11 +328,11 @@ function Main {
         return
     }
     
-    # Step 2: Read entries from CSV file (FullName + StudNo)
+    # Step 2: Read entries from CSV file (FullName)
     $entries = Read-NamesFromCSV -FilePath $namesFile
     if ($entries.Count -eq 0) {
         Write-Host "No valid entries found in the file." -ForegroundColor Red
-        Write-Host "Make sure your CSV has both 'FullName' and 'StudNo' column headers." -ForegroundColor Yellow
+        Write-Host "Make sure your CSV has a 'FullName' column header." -ForegroundColor Yellow
         return
     }
     
@@ -340,12 +341,20 @@ function Main {
     Write-Host "Default password: $NewPassword" -ForegroundColor Yellow
     $useCustomPassword = Read-Host "Do you want to use a different password? (Y/N)"
     
+    # Answer N/n/false (or anything else) uses the default password.
     $resetPassword = $NewPassword
-    if ($useCustomPassword -eq 'Y' -or $useCustomPassword -eq 'y') {
-        $customPassword = Read-Host "Enter the new password"
+    if ($useCustomPassword -eq 'Y' -or $useCustomPassword -eq 'y' -or $useCustomPassword -eq 'true') {
+        $customPassword = Read-Host "Enter the new password (press Enter to keep the default)"
         if (-not [string]::IsNullOrWhiteSpace($customPassword)) {
             $resetPassword = $customPassword
         }
+        else {
+            Write-Host "Nothing entered - using the default password: $NewPassword" -ForegroundColor Yellow
+            $resetPassword = $NewPassword
+        }
+    }
+    else {
+        Write-Host "Using the default password: $NewPassword" -ForegroundColor Yellow
     }
     
     # Step 4: Show summary
@@ -355,7 +364,7 @@ function Main {
     Write-Host "`n=== CONFIRMATION REQUIRED ===" -ForegroundColor Red
     Write-Host "This will reset passwords for $($entries.Count) users to: '$resetPassword'" -ForegroundColor Yellow
     Write-Host "  Domain: $Domain" -ForegroundColor Yellow
-    Write-Host "  Lookup: By StudNo as username" -ForegroundColor Yellow
+    Write-Host "  Lookup: By FullName" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "WARNING: This will forcefully change user passwords." -ForegroundColor Red
     Write-Host "Users will not be able to log in with their old password." -ForegroundColor Red
@@ -380,14 +389,14 @@ function Main {
     
     foreach ($entry in $entries) {
         Write-Host "`n" + ("="*50) -ForegroundColor DarkGray
-        Write-Host "Processing: $($entry.FullName) (StudNo: $($entry.StudNo))" -ForegroundColor White
+        Write-Host "Processing: $($entry.FullName)" -ForegroundColor White
         
-        $result = Reset-ADUserPassword -FullName $entry.FullName -StudNo $entry.StudNo -Password $resetPassword
+        $result = Reset-ADUserPassword -FullName $entry.FullName -Password $resetPassword
         
         # Apply force password change if selected
         if ($result.Status -eq "Success" -and $forceChange) {
             try {
-                $adUser = Get-ADUser -Identity $entry.StudNo
+                $adUser = Get-ADUser -Identity $result.Username
                 Set-ADUser -Identity $adUser.DistinguishedName -ChangePasswordAtLogon $true
                 Write-Host "  NOTE: User will be required to change password at next logon." -ForegroundColor Yellow
                 $result.Message += " (Change at logon enforced)"
@@ -399,7 +408,6 @@ function Main {
         
         $resultObject = [PSCustomObject]@{
             FullName = $entry.FullName
-            StudNo   = $entry.StudNo
             Username = if ($result.Username) { $result.Username } else { "" }
             Status   = if ($result.Status) { $result.Status } else { "Failed" }
             Message  = if ($result.Message) { $result.Message } else { "Unknown error" }
@@ -435,7 +443,7 @@ function Main {
     
     if ($results.Count -gt 0) {
         Write-Host "`n--- Detailed Results ---" -ForegroundColor White
-        $results | Format-Table FullName, StudNo, Status -AutoSize | Out-Host
+        $results | Format-Table FullName, Username, Status -AutoSize | Out-Host
     }
     
     # Step 8: Let user choose where to save the results CSV

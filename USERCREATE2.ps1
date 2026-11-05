@@ -1,7 +1,7 @@
 # Active Directory User Creation Script
 # Enhanced version with OU tree browser and proper special character handling
-# Updated: Reads names from CSV file (FullName and StudNo columns)
-# Updated: Uses StudNo as username instead of generating from full name
+# Updated: Reads names from CSV file (FullName column)
+# Updated: Username is generated from the full name
 # Updated: Existing users are skipped entirely (no changes made)
 # Script compatibility verified for PowerShell 5.1+
 
@@ -288,7 +288,7 @@ function Get-ResultsSavePath {
     }
 }
 
-# Function to read names from CSV file (FullName + StudNo columns)
+# Function to read names from CSV file (FullName column)
 function Read-NamesFromCSV {
     param([string]$FilePath)
     
@@ -316,25 +316,17 @@ function Read-NamesFromCSV {
             return @()
         }
         
-        if ($columns -notcontains 'StudNo') {
-            Write-Error "CSV file does not contain a 'StudNo' column."
-            Write-Host "Available columns: $($columns -join ', ')" -ForegroundColor Yellow
-            return @()
-        }
-        
         $entries = @()
         foreach ($row in $csvData) {
             $fullName = $row.FullName.Trim()
-            $studNo = $row.StudNo.Trim()
             
-            if (-not [string]::IsNullOrWhiteSpace($fullName) -and -not [string]::IsNullOrWhiteSpace($studNo)) {
+            if (-not [string]::IsNullOrWhiteSpace($fullName)) {
                 $entries += [PSCustomObject]@{
                     FullName = $fullName
-                    StudNo   = $studNo
                 }
             }
-            elseif (-not [string]::IsNullOrWhiteSpace($fullName)) {
-                Write-Warning "Row has FullName '$fullName' but empty StudNo. Skipping."
+            else {
+                Write-Warning "Row has empty FullName. Skipping."
             }
         }
         
@@ -599,11 +591,10 @@ function Get-TargetOUMannualy {
     }
 }
 
-# Function to create AD user using StudNo as username
+# Function to create AD user with a username generated from the full name
 function Create-ADUserFromName {
     param(
         [string]$FullName,
-        [string]$StudNo,
         [string]$TargetOUPath
     )
     
@@ -616,14 +607,14 @@ function Create-ADUserFromName {
         }
     }
     
-    # Use student number as the username directly
-    $Username = $StudNo.Trim()
+    # Generate the username from the full name
+    $Username = Generate-Username $FullName
     
     if ([string]::IsNullOrWhiteSpace($Username)) {
-        Write-Error "Student number is empty for: $FullName"
+        Write-Error "Could not generate a username for: $FullName"
         return @{
             Status = "Failed"
-            Message = "Student number is empty"
+            Message = "Username could not be generated"
             Username = ""
         }
     }
@@ -657,7 +648,7 @@ function Create-ADUserFromName {
     $UserPrincipalName = "$Username@$Domain"
     
     Write-Host "`nCreating account for: $FullName" -ForegroundColor Cyan
-    Write-Host "  StudNo / Username: $Username" -ForegroundColor Green
+    Write-Host "  Username: $Username" -ForegroundColor Green
     Write-Host "  Initial Password: $InitialPassword" -ForegroundColor Yellow
     Write-Host "  User Principal Name: $UserPrincipalName" -ForegroundColor Green
     Write-Host "  Display Name: $DisplayName" -ForegroundColor Green
@@ -727,10 +718,10 @@ function Show-Summary {
     Write-Host "  OU Path: $($OUInfo.FullPath)" -ForegroundColor Gray
     Write-Host "Domain: $Domain" -ForegroundColor Yellow
     Write-Host "Initial Password: $InitialPassword" -ForegroundColor Yellow
-    Write-Host "Username Source: StudNo column" -ForegroundColor Yellow
+    Write-Host "Username Source: Generated from FullName" -ForegroundColor Yellow
     Write-Host "NOTE: Existing users will be SKIPPED entirely (no changes made)" -ForegroundColor Yellow
     
-   Write-Host "`n--- FullName -> StudNo (Username) ---" -ForegroundColor White
+   Write-Host "`n--- FullName -> Username ---" -ForegroundColor White
 
 # Find the longest FullName for padding
 $maxNameLength = 0
@@ -745,7 +736,7 @@ $maxNameLength += 5
 
 foreach ($entry in $Entries) {
     $paddedName = $entry.FullName.PadRight($maxNameLength)
-    Write-Host "$paddedName -> $($entry.StudNo)" -ForegroundColor Gray
+    Write-Host "$paddedName -> $(Generate-Username $entry.FullName)" -ForegroundColor Gray
 }
     
     Write-Host "`n=================================" -ForegroundColor Cyan
@@ -759,8 +750,8 @@ function Main {
     Write-Host "     ACTIVE DIRECTORY USER CREATION TOOL" -ForegroundColor Cyan
     Write-Host "     (Enhanced Special Character Support)" -ForegroundColor Cyan
     Write-Host "     (Graphical OU Browser)" -ForegroundColor Cyan
-    Write-Host "     (CSV Input: FullName + StudNo columns)" -ForegroundColor Cyan
-    Write-Host "     (Username = StudNo)" -ForegroundColor Cyan
+    Write-Host "     (CSV Input: FullName column)" -ForegroundColor Cyan
+    Write-Host "     (Username generated from FullName)" -ForegroundColor Cyan
     Write-Host "     (Existing Users: Skip Entirely)" -ForegroundColor Cyan
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
@@ -785,11 +776,11 @@ function Main {
         return
     }
     
-    # Step 2: Read entries from CSV file (FullName + StudNo)
+    # Step 2: Read entries from CSV file (FullName)
     $entries = Read-NamesFromCSV -FilePath $namesFile
     if ($entries.Count -eq 0) {
         Write-Host "No valid entries found in the file." -ForegroundColor Red
-        Write-Host "Make sure your CSV has both 'FullName' and 'StudNo' column headers." -ForegroundColor Yellow
+        Write-Host "Make sure your CSV has a 'FullName' column header." -ForegroundColor Yellow
         return
     }
     
@@ -814,7 +805,7 @@ function Main {
     Write-Host "  OU: $($ouInfo.Name)" -ForegroundColor Yellow
     Write-Host "  OU Path: $($ouInfo.FullPath)" -ForegroundColor Gray
     Write-Host "  Domain: $Domain" -ForegroundColor Yellow
-    Write-Host "  Username source: StudNo column" -ForegroundColor Cyan
+    Write-Host "  Username source: Generated from FullName" -ForegroundColor Cyan
     Write-Host "  New users: Created with password $InitialPassword" -ForegroundColor Green
     Write-Host "  Existing users: SKIPPED entirely (no changes made)" -ForegroundColor Yellow
     $confirmation = Read-Host "`nType 'YES' to proceed, anything else to cancel"
@@ -834,13 +825,12 @@ function Main {
     
     foreach ($entry in $entries) {
         Write-Host "`n" + ("="*50) -ForegroundColor DarkGray
-        Write-Host "Processing: $($entry.FullName) (StudNo: $($entry.StudNo))" -ForegroundColor White
+        Write-Host "Processing: $($entry.FullName)" -ForegroundColor White
         
-        $result = Create-ADUserFromName -FullName $entry.FullName -StudNo $entry.StudNo -TargetOUPath $ouInfo.FullPath
+        $result = Create-ADUserFromName -FullName $entry.FullName -TargetOUPath $ouInfo.FullPath
         
         $resultObject = [PSCustomObject]@{
             FullName = $entry.FullName
-            StudNo   = $entry.StudNo
             Username = if ($result.Username) { $result.Username } else { "" }
             Status   = if ($result.Status) { $result.Status } else { "Failed" }
             Message  = if ($result.Message) { $result.Message } else { "Unknown error" }
@@ -885,7 +875,7 @@ function Main {
     
     if ($results.Count -gt 0) {
         Write-Host "`n--- Detailed Results ---" -ForegroundColor White
-        $results | Format-Table FullName, StudNo, Status -AutoSize | Out-Host
+        $results | Format-Table FullName, Username, Status -AutoSize | Out-Host
     }
     
     # Step 8: Let user choose where to save the results CSV

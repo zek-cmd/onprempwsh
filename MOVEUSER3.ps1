@@ -1,7 +1,7 @@
 # Active Directory User Move Script (CSV-Based)
 # Move existing users to a different Organizational Unit
-# Uses names.csv file (FullName + StudNo columns)
-# Uses StudNo as the username for AD lookup
+# Uses names.csv file (FullName column)
+# Looks users up in AD by FullName (Display Name)
 # Script compatibility verified for PowerShell 5.1+
 
 # Import required assemblies for dialog boxes
@@ -113,7 +113,7 @@ function Get-ResultsSavePath {
     }
 }
 
-# Function to read entries from CSV file (FullName + StudNo columns)
+# Function to read entries from CSV file (FullName column)
 function Read-NamesFromCSV {
     param([string]$FilePath)
     
@@ -140,25 +140,17 @@ function Read-NamesFromCSV {
             return @()
         }
         
-        if ($columns -notcontains 'StudNo') {
-            Write-Error "CSV file does not contain a 'StudNo' column."
-            Write-Host "Available columns: $($columns -join ', ')" -ForegroundColor Yellow
-            return @()
-        }
-        
         $entries = @()
         foreach ($row in $csvData) {
             $fullName = $row.FullName.Trim()
-            $studNo = $row.StudNo.Trim()
             
-            if (-not [string]::IsNullOrWhiteSpace($studNo)) {
+            if (-not [string]::IsNullOrWhiteSpace($fullName)) {
                 $entries += [PSCustomObject]@{
                     FullName = $fullName
-                    StudNo   = $studNo
                 }
             }
             else {
-                Write-Warning "Row has empty StudNo. Skipping."
+                Write-Warning "Row has empty FullName. Skipping."
             }
         }
         
@@ -423,11 +415,10 @@ function Get-TargetOUMannualy {
     }
 }
 
-# Function to move AD user to target OU (looked up by StudNo as username)
+# Function to move AD user to target OU (looked up by FullName)
 function Move-ADUserToOU {
     param(
         [string]$FullName,
-        [string]$StudNo,
         [string]$TargetOUPath
     )
     
@@ -441,38 +432,49 @@ function Move-ADUserToOU {
         }
     }
     
-    $Username = $StudNo.Trim()
-    
-    if ([string]::IsNullOrWhiteSpace($Username)) {
-        Write-Error "Student number is empty for: $FullName"
+    if ([string]::IsNullOrWhiteSpace($FullName)) {
+        Write-Error "Full name is empty."
         return @{
             Status = "Failed"
-            Message = "Student number is empty"
+            Message = "Full name is empty"
             Username = ""
             CurrentOU = ""
         }
     }
     
     Write-Host "`nLooking up user: $FullName" -ForegroundColor White
-    Write-Host "  StudNo / Username: $Username" -ForegroundColor Gray
     
     $adUser = $null
     try {
-        $adUser = Get-ADUser -Identity $Username -Properties DistinguishedName, CanonicalName, Name, SamAccountName
+        $escapedName = $FullName.Trim() -replace "'", "''"
+        $adMatches = @(Get-ADUser -Filter "Name -eq '$escapedName'" -Properties DistinguishedName, CanonicalName, Name, SamAccountName)
     }
     catch {
-        # User not found
+        # Lookup failed
+        $adMatches = @()
     }
     
-    if (-not $adUser) {
-        Write-Host "  ERROR: User with StudNo '$Username' not found in Active Directory." -ForegroundColor Red
+    if ($adMatches.Count -eq 0) {
+        Write-Host "  ERROR: User '$FullName' not found in Active Directory." -ForegroundColor Red
         return @{
             Status = "Failed"
             Message = "User not found in AD"
-            Username = $Username
+            Username = ""
             CurrentOU = ""
         }
     }
+    
+    if ($adMatches.Count -gt 1) {
+        Write-Host "  ERROR: Found $($adMatches.Count) AD users named '$FullName'. Skipping to avoid moving the wrong account." -ForegroundColor Red
+        return @{
+            Status = "Failed"
+            Message = "Multiple AD users match this name"
+            Username = ($adMatches | ForEach-Object { $_.SamAccountName }) -join ', '
+            CurrentOU = ""
+        }
+    }
+    
+    $adUser = $adMatches[0]
     
     $currentOU = $adUser.DistinguishedName -replace '^CN=.*?,(?=OU=|CN=)', ''
     
@@ -529,9 +531,9 @@ function Show-Summary {
     Write-Host "Target OU: $($OUInfo.Name)" -ForegroundColor Yellow
     Write-Host "  OU Path: $($OUInfo.FullPath)" -ForegroundColor Gray
     Write-Host "Domain: $Domain" -ForegroundColor Yellow
-    Write-Host "Lookup Method: StudNo as username" -ForegroundColor Yellow
+    Write-Host "Lookup Method: FullName (Display Name)" -ForegroundColor Yellow
     
-    Write-Host "`n--- FullName -> StudNo ---" -ForegroundColor White
+    Write-Host "`n--- Users to move ---" -ForegroundColor White
     
     $maxNameLength = 0
     foreach ($entry in $Entries) {
@@ -543,7 +545,7 @@ function Show-Summary {
     
     foreach ($entry in $Entries) {
         $paddedName = $entry.FullName.PadRight($maxNameLength)
-        Write-Host "$paddedName -> $($entry.StudNo)" -ForegroundColor Gray
+        Write-Host $paddedName -ForegroundColor Gray
     }
     
     Write-Host "`n=================================" -ForegroundColor Cyan
@@ -555,8 +557,8 @@ function Main {
     
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host "     ACTIVE DIRECTORY USER MOVE TOOL" -ForegroundColor Cyan
-    Write-Host "     (CSV-Based: FullName + StudNo columns)" -ForegroundColor Cyan
-    Write-Host "     (Lookup by StudNo as username)" -ForegroundColor Cyan
+    Write-Host "     (CSV-Based: FullName column)" -ForegroundColor Cyan
+    Write-Host "     (Lookup by FullName)" -ForegroundColor Cyan
     Write-Host "     (Graphical OU Browser)" -ForegroundColor Cyan
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
@@ -583,11 +585,11 @@ function Main {
         return
     }
     
-    # Step 2: Read entries from CSV file (FullName + StudNo)
+    # Step 2: Read entries from CSV file (FullName)
     $entries = Read-NamesFromCSV -FilePath $namesFile
     if ($entries.Count -eq 0) {
         Write-Host "No valid entries found in the file." -ForegroundColor Red
-        Write-Host "Make sure your CSV has both 'FullName' and 'StudNo' column headers." -ForegroundColor Yellow
+        Write-Host "Make sure your CSV has a 'FullName' column header." -ForegroundColor Yellow
         return
     }
     
@@ -612,7 +614,7 @@ function Main {
     Write-Host "  Target OU: $($ouInfo.Name)" -ForegroundColor Yellow
     Write-Host "  OU Path: $($ouInfo.FullPath)" -ForegroundColor Gray
     Write-Host "  Domain: $Domain" -ForegroundColor Yellow
-    Write-Host "  Lookup: By StudNo as username" -ForegroundColor Yellow
+    Write-Host "  Lookup: By FullName" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "WARNING: Moving users can affect Group Policy application," -ForegroundColor Red
     Write-Host "login scripts, and other OU-specific settings." -ForegroundColor Red
@@ -633,13 +635,12 @@ function Main {
     
     foreach ($entry in $entries) {
         Write-Host "`n" + ("="*50) -ForegroundColor DarkGray
-        Write-Host "Processing: $($entry.FullName) (StudNo: $($entry.StudNo))" -ForegroundColor White
+        Write-Host "Processing: $($entry.FullName)" -ForegroundColor White
         
-        $result = Move-ADUserToOU -FullName $entry.FullName -StudNo $entry.StudNo -TargetOUPath $ouInfo.FullPath
+        $result = Move-ADUserToOU -FullName $entry.FullName -TargetOUPath $ouInfo.FullPath
         
         $resultObject = [PSCustomObject]@{
             FullName = $entry.FullName
-            StudNo   = $entry.StudNo
             Username = if ($result.Username) { $result.Username } else { "" }
             Status   = if ($result.Status) { $result.Status } else { "Failed" }
             Message  = if ($result.Message) { $result.Message } else { "Unknown error" }
@@ -683,7 +684,7 @@ function Main {
     
     if ($results.Count -gt 0) {
         Write-Host "`n--- Detailed Results ---" -ForegroundColor White
-        $results | Format-Table FullName, StudNo, Status -AutoSize | Out-Host
+        $results | Format-Table FullName, Status -AutoSize | Out-Host
     }
     
     # Step 8: Let user choose where to save the results CSV
