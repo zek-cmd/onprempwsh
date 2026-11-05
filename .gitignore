@@ -13,3 +13,7 @@
 # Keep the JIT page
 !JIT/
 !JIT/index.html
+
+# Keep the session log
+!JIT/logs/
+!JIT/logs/session-log.json
