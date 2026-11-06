@@ -3,6 +3,8 @@
 # Run from Domain Controller with Administrator privileges
 # Requires: ActiveDirectory module, PowerShell 7 (parallel sends)
 #
+# At the start you choose the link: the default video, or any URL you type.
+#
 # What it does, per target PC:
 #   1. Writes two tiny helper scripts into C:\ProgramData\MAS on that PC.
 #   2. Registers a one-time task that opens Chrome on the video, in the
@@ -14,13 +16,44 @@
 Import-Module ActiveDirectory -ErrorAction Stop
 
 # === CONFIGURATION ===
-$VideoUrl    = 'https://youtu.be/dQw4w9WgXcQ?si=6TEYyQWpy-qEcbrV'
+$DefaultVideoUrl = 'https://youtu.be/dQw4w9WgXcQ?si=6TEYyQWpy-qEcbrV'   # used when you pick the default
 $TaskName    = 'MAS_Rickroll'
 $HelperName  = 'rickroll'
 $DelayMinutes = 1     # play the video this many minutes from now
 $ThrottleLimit = 20   # how many PCs are worked on at the same time
 
 $domainName = (Get-ADDomain).Name
+
+# === CHOOSE THE LINK ===
+Clear-Host
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "    REMOTE RICKROLL SENDER" -ForegroundColor Yellow
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Which link should open on the target PCs?" -ForegroundColor Cyan
+Write-Host "  [1] Default video" -ForegroundColor Gray
+Write-Host "  [2] Type a custom URL" -ForegroundColor Gray
+Write-Host ""
+
+$VideoUrl = $DefaultVideoUrl
+$urlChoice = Read-Host "Choose 1 or 2 (Enter = 1)"
+if ($urlChoice -match '^[2cC]$') {
+    while ($true) {
+        $customUrl = (Read-Host "Type the URL to open").Trim()
+        # links pasted from a chat or a browser often arrive wrapped in quotes
+        $customUrl = $customUrl.Trim('"').Trim("'").Trim()
+        if (-not $customUrl) {
+            Write-Host "Nothing typed - using the default video." -ForegroundColor Yellow
+            break
+        }
+        if ($customUrl -notmatch '^https?://\S+$') {
+            Write-Host "That is not a web address - it must start with http:// or https://" -ForegroundColor Red
+            continue
+        }
+        $VideoUrl = $customUrl
+        break
+    }
+}
 
 Clear-Host
 Write-Host "========================================" -ForegroundColor Cyan
@@ -188,7 +221,8 @@ foreach ($c in $finalSelection) {
 # === CONFIRM ===
 Write-Host "`n=== SEND RICKROLL ===" -ForegroundColor Cyan
 Write-Host "Chrome will open on the selected PCs, in the session of the user logged on there." -ForegroundColor Gray
-$confirm = Read-Host "Send the rickroll to these $($finalSelection.Count) computer(s)? (Y/N)"
+Write-Host "Link: $VideoUrl" -ForegroundColor Yellow
+$confirm = Read-Host "Send this link to these $($finalSelection.Count) computer(s)? (Y/N)"
 
 # === WORK THAT RUNS ON EACH TARGET PC ===
 $remoteRickroll = {
