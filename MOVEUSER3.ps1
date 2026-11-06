@@ -415,6 +415,180 @@ function Get-TargetOUMannualy {
     }
 }
 
+# Function to calculate Levenshtein edit distance between two strings
+function Get-LevenshteinDistance {
+    param(
+        [string]$String1,
+        [string]$String2
+    )
+    
+    if ($null -eq $String1) { $String1 = "" }
+    if ($null -eq $String2) { $String2 = "" }
+    
+    $s1 = $String1.ToLowerInvariant()
+    $s2 = $String2.ToLowerInvariant()
+    
+    $len1 = $s1.Length
+    $len2 = $s2.Length
+    
+    if ($len1 -eq 0) { return $len2 }
+    if ($len2 -eq 0) { return $len1 }
+    
+    $previous = New-Object 'int[]' ($len2 + 1)
+    $current = New-Object 'int[]' ($len2 + 1)
+    
+    for ($j = 0; $j -le $len2; $j++) { $previous[$j] = $j }
+    
+    for ($i = 1; $i -le $len1; $i++) {
+        $current[0] = $i
+        $char1 = $s1[$i - 1]
+        
+        for ($j = 1; $j -le $len2; $j++) {
+            $char2 = $s2[$j - 1]
+            $cost = if ($char1 -eq $char2) { 0 } else { 1 }
+            
+            $deletion = $previous[$j] + 1
+            $insertion = $current[$j - 1] + 1
+            $substitution = $previous[$j - 1] + $cost
+            
+            $min = $deletion
+            if ($insertion -lt $min) { $min = $insertion }
+            if ($substitution -lt $min) { $min = $substitution }
+            
+            $current[$j] = $min
+        }
+        
+        # Swap rows
+        $temp = $previous
+        $previous = $current
+        $current = $temp
+    }
+    
+    return $previous[$len2]
+}
+
+# Function to calculate similarity ratio (0.0 - 1.0) between two strings
+function Get-NameSimilarity {
+    param(
+        [string]$Name1,
+        [string]$Name2
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($Name1) -or [string]::IsNullOrWhiteSpace($Name2)) {
+        return 0.0
+    }
+    
+    $a = ($Name1.Trim() -replace '\s+', ' ')
+    $b = ($Name2.Trim() -replace '\s+', ' ')
+    
+    $maxLength = [Math]::Max($a.Length, $b.Length)
+    if ($maxLength -eq 0) { return 0.0 }
+    
+    $distance = Get-LevenshteinDistance -String1 $a -String2 $b
+    return [Math]::Round((1.0 - ($distance / $maxLength)), 4)
+}
+
+# Function to find close (non-exact) name matches in Active Directory
+function Get-CloseMatchADUsers {
+    [CmdletBinding()]
+    param(
+        [string]$FullName,
+        [double]$Threshold = 0.75,
+        [int]$MaxResults = 5
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($FullName)) { return @() }
+    
+    # Build a candidate pool using each meaningful token of the name
+    $tokens = @($FullName.Trim() -split '\s+' | Where-Object { $_ -and $_.Length -ge 2 })
+    
+    if ($tokens.Count -eq 0) { return @() }
+    
+    $candidates = @()
+    foreach ($token in $tokens) {
+        $escapedToken = $token -replace "'", "''"
+        try {
+            $found = @(Get-ADUser -Filter "Name -like '*$escapedToken*'" -Properties Name, SamAccountName, DistinguishedName, Enabled -ResultSetSize 500)
+            $candidates += $found
+        }
+        catch {
+            Write-Host "  WARNING: Close-match lookup failed for token '$token': $_" -ForegroundColor Yellow
+        }
+    }
+    
+    if ($candidates.Count -eq 0) { return @() }
+    
+    $candidates = $candidates | Sort-Object DistinguishedName -Unique
+    
+    $scored = @()
+    foreach ($candidate in $candidates) {
+        $score = Get-NameSimilarity -Name1 $FullName -Name2 $candidate.Name
+        
+        if ($score -ge $Threshold) {
+            $currentOU = $candidate.DistinguishedName -replace '^CN=.*?,(?=OU=|CN=)', ''
+            $scored += [PSCustomObject]@{
+                Name              = $candidate.Name
+                SamAccountName    = $candidate.SamAccountName
+                DistinguishedName = $candidate.DistinguishedName
+                Enabled           = $candidate.Enabled
+                CurrentOU         = $currentOU
+                Similarity        = $score
+                SimilarityPercent = [Math]::Round($score * 100, 1)
+            }
+        }
+    }
+    
+    if ($scored.Count -eq 0) { return @() }
+    
+    return @($scored | Sort-Object Similarity -Descending | Select-Object -First $MaxResults)
+}
+
+# Function to display a close match candidate and ask the user to confirm
+function Confirm-CloseMatch {
+    param(
+        [string]$FullName,
+        [array]$CloseMatches
+    )
+    
+    Write-Host "  No exact name match found for '$FullName'." -ForegroundColor Yellow
+    Write-Host "  Possible close match(es) in Active Directory:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host ("  {0,-3} {1,-32} {2,-22} {3,-8} {4}" -f "#", "AD Name", "Username", "Similar", "Enabled") -ForegroundColor Cyan
+    Write-Host ("  {0,-3} {1,-32} {2,-22} {3,-8} {4}" -f "---", "-------", "--------", "-------", "-------") -ForegroundColor DarkGray
+    
+    $index = 1
+    foreach ($match in $CloseMatches) {
+        Write-Host ("  {0,-3} {1,-32} {2,-22} {3,-8} {4}" -f $index, $match.Name, $match.SamAccountName, "$($match.SimilarityPercent)%", $match.Enabled)
+        Write-Host ("      OU: {0}" -f $match.CurrentOU) -ForegroundColor DarkGray
+        $index++
+    }
+    Write-Host ""
+    
+    $selection = Read-Host "  Move a close match? Enter # to move that account, 'A' to accept the best match, or press Enter to skip"
+    
+    if ([string]::IsNullOrWhiteSpace($selection)) {
+        return @{ Action = "Skip"; User = $null }
+    }
+    
+    if ($selection.Trim().ToUpper() -eq 'A') {
+        $acceptAll = Read-Host "  Accept the best match for ALL remaining close matches automatically? (y/N)"
+        if ($acceptAll -eq 'y' -or $acceptAll -eq 'Y') {
+            $script:acceptAllCloseMatches = $true
+        }
+        return @{ Action = "Move"; User = $CloseMatches[0] }
+    }
+    
+    $selectedIndex = 0
+    if ([int]::TryParse($selection.Trim(), [ref]$selectedIndex)) {
+        if ($selectedIndex -ge 1 -and $selectedIndex -le $CloseMatches.Count) {
+            return @{ Action = "Move"; User = $CloseMatches[$selectedIndex - 1] }
+        }
+    }
+    
+    Write-Host "  Invalid selection. Skipping user." -ForegroundColor Yellow
+    return @{ Action = "Skip"; User = $null }
+}
+
 # Function to move AD user to target OU (looked up by FullName)
 function Move-ADUserToOU {
     param(
@@ -455,12 +629,94 @@ function Move-ADUserToOU {
     }
     
     if ($adMatches.Count -eq 0) {
-        Write-Host "  ERROR: User '$FullName' not found in Active Directory." -ForegroundColor Red
-        return @{
-            Status = "Failed"
-            Message = "User not found in AD"
-            Username = ""
-            CurrentOU = ""
+        Write-Host "  No exact match for '$FullName'. Checking for close matches..." -ForegroundColor Yellow
+        
+        $closeMatches = @(Get-CloseMatchADUsers -FullName $FullName)
+        
+        if ($closeMatches.Count -eq 0) {
+            Write-Host "  ERROR: User '$FullName' not found in Active Directory (no close matches either)." -ForegroundColor Red
+            return @{
+                Status = "Failed"
+                Message = "User not found in AD (no close match)"
+                Username = ""
+                CurrentOU = ""
+            }
+        }
+        
+        $decision = $null
+        
+        if ($script:acceptAllCloseMatches) {
+            Write-Host "  Auto-accepting best close match (accept-all previously chosen)." -ForegroundColor Yellow
+            Write-Host "  Matched: $($closeMatches[0].Name) [$($closeMatches[0].SimilarityPercent)%] ($($closeMatches[0].SamAccountName))" -ForegroundColor Yellow
+            $decision = @{ Action = "Move"; User = $closeMatches[0] }
+        }
+        else {
+            $decision = Confirm-CloseMatch -FullName $FullName -CloseMatches $closeMatches
+        }
+        
+        if ($decision.Action -ne "Move" -or -not $decision.User) {
+            Write-Host "  SKIPPED: Close match not confirmed by user. User was not moved." -ForegroundColor Yellow
+            return @{
+                Status = "Skipped"
+                Message = "Skipped - close match not confirmed (candidate: $(($closeMatches | ForEach-Object { $_.Name }) -join ', '))"
+                Username = ""
+                CurrentOU = ""
+            }
+        }
+        
+        $closeMatch = $decision.User
+        Write-Host "  Confirmed close match: $($closeMatch.Name)" -ForegroundColor Green
+        
+        $adUser = $null
+        try {
+            $adUser = Get-ADUser -Identity $closeMatch.DistinguishedName -Properties DistinguishedName, CanonicalName, Name, SamAccountName
+        }
+        catch {
+            Write-Host "  ERROR: Could not re-read close match account: $_" -ForegroundColor Red
+            return @{
+                Status = "Failed"
+                Message = "Close match confirmed but account read failed: $_"
+                Username = $closeMatch.SamAccountName
+                CurrentOU = $closeMatch.CurrentOU
+            }
+        }
+        
+        $matchNote = "Moved via close match ($($closeMatch.SimilarityPercent)% similar to '$FullName')"
+        
+        $currentOU = $adUser.DistinguishedName -replace '^CN=.*?,(?=OU=|CN=)', ''
+        
+        Write-Host "  Found user: $($adUser.Name)" -ForegroundColor Green
+        Write-Host "  Current Location: $currentOU" -ForegroundColor Gray
+        Write-Host "  Target Location: $TargetOUPath" -ForegroundColor Yellow
+        
+        if ($currentOU -eq $TargetOUPath) {
+            Write-Host "  SKIPPED: User is already in the target OU." -ForegroundColor Yellow
+            return @{
+                Status = "Skipped"
+                Message = "Already in target OU (confirmed close match)"
+                Username = $adUser.SamAccountName
+                CurrentOU = $currentOU
+            }
+        }
+        
+        try {
+            Move-ADObject -Identity $adUser.DistinguishedName -TargetPath $TargetOUPath
+            Write-Host "  SUCCESS: Moved confirmed close match to target OU." -ForegroundColor Green
+            return @{
+                Status = "Success"
+                Message = $matchNote
+                Username = $adUser.SamAccountName
+                CurrentOU = $currentOU
+            }
+        }
+        catch {
+            Write-Host "  ERROR: Failed to move user: $_" -ForegroundColor Red
+            return @{
+                Status = "Failed"
+                Message = "Move operation failed: $_"
+                Username = $adUser.SamAccountName
+                CurrentOU = $currentOU
+            }
         }
     }
     
@@ -532,6 +788,7 @@ function Show-Summary {
     Write-Host "  OU Path: $($OUInfo.FullPath)" -ForegroundColor Gray
     Write-Host "Domain: $Domain" -ForegroundColor Yellow
     Write-Host "Lookup Method: FullName (Display Name)" -ForegroundColor Yellow
+    Write-Host "Close matches: prompted for confirmation when no exact match is found" -ForegroundColor Yellow
     
     Write-Host "`n--- Users to move ---" -ForegroundColor White
     
@@ -554,6 +811,9 @@ function Show-Summary {
 # Main execution
 function Main {
     Clear-Host
+    
+    # Close-match state (reset each run)
+    $script:acceptAllCloseMatches = $false
     
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host "     ACTIVE DIRECTORY USER MOVE TOOL" -ForegroundColor Cyan
