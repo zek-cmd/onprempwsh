@@ -7,8 +7,10 @@
 #
 # What it does, per target PC:
 #   1. Writes two tiny helper scripts into C:\ProgramData\MAS on that PC.
-#   2. Registers a one-time task that opens Chrome on the video, in the
-#      session of whoever is logged on there (so the user really sees it).
+#   2. Registers a one-time task that opens the video in a browser on that
+#      PC, in the session of whoever is logged on there (so the user really
+#      sees it). Chrome is used when present, otherwise Edge, otherwise
+#      Firefox, otherwise the PC's default browser.
 #   3. Registers a second task, running as SYSTEM a couple of minutes later,
 #      that deletes the first task and both helper files - the task removes
 #      itself after it fired.
@@ -220,7 +222,8 @@ foreach ($c in $finalSelection) {
 
 # === CONFIRM ===
 Write-Host "`n=== SEND RICKROLL ===" -ForegroundColor Cyan
-Write-Host "Chrome will open on the selected PCs, in the session of the user logged on there." -ForegroundColor Gray
+Write-Host "A browser opens on the selected PCs, in the session of the user logged on there." -ForegroundColor Gray
+Write-Host "Browser order per PC: Chrome, else Edge, else Firefox, else the default browser." -ForegroundColor Gray
 Write-Host "Link: $VideoUrl" -ForegroundColor Yellow
 $confirm = Read-Host "Send this link to these $($finalSelection.Count) computer(s)? (Y/N)"
 
@@ -253,17 +256,35 @@ $remoteRickroll = {
     $cleanFile = Join-Path $dir ($HelperName + '-clean.ps1')
     $cleanTask = $TaskName + '-Cleanup'
 
-    # --- helper 1: opens the video in Chrome (or the default browser) ---
+    # --- helper 1: opens the video in a browser the PC actually has ---
     $playBody = @'
 $url = '__URL__'
-$candidates = @()
-if ($env:ProgramFiles)        { $candidates += (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe') }
-if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe') }
-if ($env:LOCALAPPDATA)        { $candidates += (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe') }
-$chrome = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+# Fallback order: Chrome, then Edge, then Firefox. The first one that is
+# really installed gets the link; if none is, Windows opens it in whatever
+# the PC's default browser is.
+$roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) | Where-Object { $_ }
+$browsers = @(
+    @{ Exe = 'Google\Chrome\Application\chrome.exe';  Args = @('--new-window', $url) }
+    @{ Exe = 'Microsoft\Edge\Application\msedge.exe'; Args = @('--new-window', $url) }
+    @{ Exe = 'Mozilla Firefox\firefox.exe';            Args = @('-new-window', $url) }
+)
+
+$found = $null
+foreach ($browser in $browsers) {
+    foreach ($root in $roots) {
+        $exe = Join-Path $root $browser.Exe
+        if (Test-Path -LiteralPath $exe) {
+            $found = @{ Exe = $exe; Args = $browser.Args }
+            break
+        }
+    }
+    if ($found) { break }
+}
+
 try {
-    if ($chrome) { Start-Process -FilePath $chrome -ArgumentList '--new-window', $url }
-    else         { Start-Process $url }
+    if ($found) { Start-Process -FilePath $found.Exe -ArgumentList $found.Args }
+    else        { Start-Process $url }
 } catch { }
 '@
     $playText = $playBody.Replace('__URL__', $Url.Replace("'", "''"))
