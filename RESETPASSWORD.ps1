@@ -6,6 +6,13 @@
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
+# Shared match checking and per-user yes/no confirmation (must sit beside this script)
+$guardScript = Join-Path $PSScriptRoot 'ADUserGuard.ps1'
+if (-not (Test-Path -LiteralPath $guardScript)) {
+    throw "ADUserGuard.ps1 is missing. It must be in the same folder as this script: $PSScriptRoot"
+}
+. $guardScript
+
 # Configuration
 $NewPassword = "P@ssw0rd"
 
@@ -390,6 +397,26 @@ function Reset-ADUserPassword {
         Write-Host "  WARNING: Account is disabled. Password will still be reset." -ForegroundColor Yellow
     }
     
+    # --- Match check: other accounts with the same or a very similar name ---
+    $matchState = Get-ADUserMatch -FullName $ADUser.DisplayName -Username $ADUser.SamAccountName -ExcludeSamAccountName $ADUser.SamAccountName
+    if ($matchState.HadError) {
+        Write-Host "  WARNING: Active Directory could not be searched for similar names." -ForegroundColor Yellow
+    }
+    $hasMatch = Show-ADUserMatch -FullName $ADUser.DisplayName -Match $matchState
+
+    # --- Yes/no confirmation for this one user ---
+    $approved = Confirm-UserAction -Action 'reset the password of this account' -TargetName $ADUser.DisplayName -Username $ADUser.SamAccountName -Detail "New password will be: $Password" -Default 'y'
+
+    if (-not $approved) {
+        Write-Host "  SKIPPED: you answered no. Password was not reset." -ForegroundColor Yellow
+        return @{
+            Status = "Skipped"
+            Message = "Not confirmed by user - password not reset"
+            Username = $ADUser.SamAccountName
+            DisplayName = $ADUser.DisplayName
+        }
+    }
+
     try {
         $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
         Set-ADAccountPassword -Identity $ADUser.DistinguishedName -NewPassword $securePassword -Reset

@@ -23,6 +23,13 @@ param(
 # Import Active Directory module
 Import-Module ActiveDirectory -ErrorAction Stop
 
+# Shared match checking and per-user yes/no confirmation (must sit beside this script)
+$guardScript = Join-Path $PSScriptRoot 'ADUserGuard.ps1'
+if (-not (Test-Path -LiteralPath $guardScript)) {
+    throw "ADUserGuard.ps1 is missing. It must be in the same folder as this script: $PSScriptRoot"
+}
+. $guardScript
+
 $ErrorActionPreference = "Stop"
 
 # Function to write colored output
@@ -681,6 +688,25 @@ if ($reportData.Count -gt 0) {
             $failureCount = 0
             
             foreach ($account in $reportData) {
+                # --- Match check and yes/no confirmation for this one account ---
+                $matchState = Get-ADUserMatch -FullName $account.DisplayName -Username $account.sAMAccountName -ExcludeSamAccountName $account.sAMAccountName
+                if ($matchState.HadError) {
+                    Write-ColorOutput "  WARNING: AD could not be searched for similar names for $($account.sAMAccountName)" "Yellow"
+                }
+                $hasMatch = Show-ADUserMatch -FullName $account.DisplayName -Match $matchState
+
+                $pendingActions = @()
+                if ($MoveAccounts) { $pendingActions += "move to $TargetMoveOU" }
+                if ($DeleteAccounts) { $pendingActions += "delete from AD" }
+                if ($DeleteFolders) { $pendingActions += "delete its redirected folder" }
+
+                $continueAccount = Confirm-UserAction -Action ($pendingActions -join ' and ') -TargetName $account.DisplayName -Username $account.sAMAccountName -Detail ("Inactive: {0} days. Use: {1}" -f $account.DaysSinceLastLogon, $account.NeverLoggedIn) -Default 'n'
+
+                if (-not $continueAccount) {
+                    Write-ColorOutput "Skipped this account (you answered no): $($account.sAMAccountName)" "Yellow"
+                    continue
+                }
+
                 # Move accounts if requested
                 if ($MoveAccounts) {
                     try {

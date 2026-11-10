@@ -10,6 +10,13 @@ Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.DirectoryServices.Protocols -ErrorAction SilentlyContinue
 
+# Shared match checking and per-user yes/no confirmation (must sit beside this script)
+$guardScript = Join-Path $PSScriptRoot 'ADUserGuard.ps1'
+if (-not (Test-Path -LiteralPath $guardScript)) {
+    throw "ADUserGuard.ps1 is missing. It must be in the same folder as this script: $PSScriptRoot"
+}
+. $guardScript
+
 # Configuration
 $InitialPassword = "P@ssw0rd"
 
@@ -643,6 +650,37 @@ function Create-ADUserFromName {
         }
     }
     
+    # --- Match check: is this the same person as an account already in AD? ---
+    $matchState = Get-ADUserMatch -FullName $FullName -Username $Username
+    if ($matchState.HadError) {
+        Write-Host "  WARNING: Active Directory could not be searched for similar names. Please check the name yourself." -ForegroundColor Yellow
+    }
+    $hasMatch = Show-ADUserMatch -FullName $FullName -Username $Username -Match $matchState
+
+    # --- Yes/no confirmation for this one person ---
+    $confirmDetail = "Target OU: $TargetOUPath"
+    $defaultAnswer = 'y'
+    if ($hasMatch) {
+        $confirmDetail = "Possible existing account(s) listed above - check it is not the same person. Target OU: $TargetOUPath"
+        $defaultAnswer = 'n'
+    }
+
+    $approved = Confirm-UserAction -Action 'create a new account' -TargetName $FullName -Username $Username -Detail $confirmDetail -Default $defaultAnswer
+
+    if (-not $approved) {
+        Write-Host "  Status: Skipped (you answered no)" -ForegroundColor Yellow
+        return @{
+            Status = "Skipped"
+            Message = "Not confirmed by user - no changes made"
+            Username = $Username
+            Password = $InitialPassword
+            UPN = ""
+            FirstName = $NameParts.FirstName
+            LastName = $NameParts.LastName
+            DisplayName = $DisplayName
+        }
+    }
+
     # User does not exist - create new account
     $SecurePassword = ConvertTo-SecureString $InitialPassword -AsPlainText -Force
     $UserPrincipalName = "$Username@$Domain"

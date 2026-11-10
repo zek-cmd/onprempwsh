@@ -8,6 +8,13 @@
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
+# Shared match checking and per-user yes/no confirmation (must sit beside this script)
+$guardScript = Join-Path $PSScriptRoot 'ADUserGuard.ps1'
+if (-not (Test-Path -LiteralPath $guardScript)) {
+    throw "ADUserGuard.ps1 is missing. It must be in the same folder as this script: $PSScriptRoot"
+}
+. $guardScript
+
 # Function to get domain configuration from environment variables
 function Get-CurrentDomainInfo {
     [CmdletBinding()]
@@ -689,6 +696,18 @@ function Move-ADUserToOU {
         Write-Host "  Current Location: $currentOU" -ForegroundColor Gray
         Write-Host "  Target Location: $TargetOUPath" -ForegroundColor Yellow
         
+        $approved = Confirm-UserAction -Action 'move this close-match account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail "Matched $($closeMatch.SimilarityPercent)% to '$FullName'. From: $currentOU -> To: $TargetOUPath" -Default 'y'
+
+        if (-not $approved) {
+            Write-Host "  SKIPPED: you answered no. User was not moved." -ForegroundColor Yellow
+            return @{
+                Status = "Skipped"
+                Message = "Not confirmed by user - not moved"
+                Username = $adUser.SamAccountName
+                CurrentOU = $currentOU
+            }
+        }
+
         if ($currentOU -eq $TargetOUPath) {
             Write-Host "  SKIPPED: User is already in the target OU." -ForegroundColor Yellow
             return @{
@@ -738,6 +757,26 @@ function Move-ADUserToOU {
     Write-Host "  Current Location: $currentOU" -ForegroundColor Gray
     Write-Host "  Target Location: $TargetOUPath" -ForegroundColor Yellow
     
+    # --- Yes/no confirmation for this one user, before any move ---
+    $confirmDetail = "From: $currentOU -> To: $TargetOUPath"
+    $defaultAnswer = 'y'
+    if ($script:acceptAllCloseMatches) {
+        $defaultAnswer = 'y'
+        $confirmDetail = "Confirmed close match for '$FullName'. From: $currentOU -> To: $TargetOUPath"
+    }
+
+    $approved = Confirm-UserAction -Action 'move this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail $confirmDetail -Default $defaultAnswer
+
+    if (-not $approved) {
+        Write-Host "  SKIPPED: you answered no. User was not moved." -ForegroundColor Yellow
+        return @{
+            Status = "Skipped"
+            Message = "Not confirmed by user - not moved"
+            Username = $adUser.SamAccountName
+            CurrentOU = $currentOU
+        }
+    }
+
     # Check if already in target OU
     if ($currentOU -eq $TargetOUPath) {
         Write-Host "  SKIPPED: User is already in the target OU." -ForegroundColor Yellow

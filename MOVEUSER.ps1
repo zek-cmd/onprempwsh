@@ -6,6 +6,13 @@
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
+# Shared match checking and per-user yes/no confirmation (must sit beside this script)
+$guardScript = Join-Path $PSScriptRoot 'ADUserGuard.ps1'
+if (-not (Test-Path -LiteralPath $guardScript)) {
+    throw "ADUserGuard.ps1 is missing. It must be in the same folder as this script: $PSScriptRoot"
+}
+. $guardScript
+
 # Function to get domain configuration from environment variables
 function Get-CurrentDomainInfo {
     [CmdletBinding()]
@@ -308,6 +315,26 @@ function Move-ADUserToOU {
         Write-Host "  WARNING: Account is disabled. Will still be moved." -ForegroundColor Yellow
     }
     
+    # --- Match check: other accounts with the same or a very similar name ---
+    $matchState = Get-ADUserMatch -FullName $ADUser.DisplayName -Username $ADUser.SamAccountName -ExcludeSamAccountName $ADUser.SamAccountName
+    if ($matchState.HadError) {
+        Write-Host "  WARNING: Active Directory could not be searched for similar names." -ForegroundColor Yellow
+    }
+    $hasMatch = Show-ADUserMatch -FullName $ADUser.DisplayName -Match $matchState
+
+    # --- Yes/no confirmation for this one user ---
+    $approved = Confirm-UserAction -Action 'move this account' -TargetName $ADUser.DisplayName -Username $ADUser.SamAccountName -Detail "From: $currentOU -> To: $TargetOUPath" -Default 'y'
+
+    if (-not $approved) {
+        Write-Host "  SKIPPED: you answered no. User was not moved." -ForegroundColor Yellow
+        return @{
+            Status = "Skipped"
+            Message = "Not confirmed by user - not moved"
+            Username = $ADUser.SamAccountName
+            CurrentOU = $currentOU
+        }
+    }
+
     if ($currentOU -eq $TargetOUPath) {
         Write-Host "  SKIPPED: User is already in the target OU." -ForegroundColor Yellow
         return @{
