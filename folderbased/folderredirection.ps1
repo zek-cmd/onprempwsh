@@ -96,12 +96,8 @@ $DriveLabel            = "Personal Network Drive"               # Label shown in
 #        bit Windows' own editor always adds (0x1000). Domain Admins / SYSTEM keep
 #        access to the folders - this is the editor's "Grant the user exclusive
 #        rights" box UNTICKED.
-# 1011 = 0x1011: the same, plus 0x10 = "Grant the user exclusive rights". The user and
-#        SYSTEM get Full Control of their own folder and the inherited Domain Admin /
-#        Administrators rights are stripped from it. Backup tools may then be unable to
-#        read those folders, so it stays off unless you answer yes at run time.
 # Never combine "Redirection not specified" (0x4) with a FullPath - the editor rejects it.
-$RedirectionFlags      = "1001"                    # set again by the exclusive-rights question below
+$RedirectionFlags      = "1001"
 
 # Keep Downloads redirection on? Set to $false if your clients ignore that GUID.
 $RedirectDownloads     = $true
@@ -511,20 +507,7 @@ try {
     Write-Host "Documents target: $UncDocumentsPath"
     if ($RedirectDownloads) { Write-Host "Downloads target: $UncDownloadsPath" }
 
-    # ========================================================================
-    # "Grant the user exclusive rights" - the editor's checkbox, Flags bit 0x10
-    # ========================================================================
     Write-Host ""
-    Write-Warn 'Exclusive rights: the user (and SYSTEM) gets Full Control of their own folder and the inherited Domain Admins / Administrators rights are REMOVED from it.'
-    Write-Info 'Off (answer no): admins keep access to every user folder - easiest to manage and back up.'
-    $UserExclusiveRights = Read-YesNo -Prompt 'Grant the user exclusive rights to their redirected folders?'
-    if ($UserExclusiveRights) {
-        $RedirectionFlags = "1011"   # 0x1001 + 0x10 (exclusive rights)
-    }
-    else {
-        $RedirectionFlags = "1001"   # no exclusive rights
-    }
-    Write-Ok "Exclusive rights: $(if ($UserExclusiveRights) { "on  (Flags=0x$RedirectionFlags)" } else { "off (Flags=0x$RedirectionFlags)" })"
 
     # ========================================================================
     # 1. ROOT FOLDER + NTFS PERMISSIONS
@@ -871,12 +854,7 @@ try {
     Write-Info "1. Sign in on a client as a test user from '$TargetOU', run 'gpupdate /force', sign out and back in."
     Write-Info "   Desktop / Documents should show '$UncUserBasePath' in their folder properties; the drive should appear."
     Write-Info "2. That user must NOT be able to open another user's folder under $UncRootPath (ABE + NTFS block this)."
-    if ($UserExclusiveRights) {
-        Write-Info "3. If the user asked for exclusive rights: that user sees Full Control of their folder, but Domain Admin cannot open it (inherited admin rights were stripped). Expected."
-    }
-    else {
-        Write-Info "3. Domain Admin must be able to browse every folder under $UncRootPath (exclusive rights are off)."
-    }
+    Write-Info "3. Domain Admin must be able to browse every folder under $UncRootPath (exclusive rights are off)."
     Write-Info "4. Open the GPO in the group policy editor and confirm the three folders show a UNC path there too."
     Write-Info "5. Client troubleshooting: 'gpresult /h report.html' then check Folder Redirection and Drive Maps sections."
 }
