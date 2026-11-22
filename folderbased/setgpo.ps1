@@ -202,6 +202,9 @@ $ComputerPolicySettings = @(
 # 3. FIREWALL BASELINE - written INTO the GPO, so every client gets it
 # ============================================================================
 $FirewallGroupName = 'AD Baseline'
+# Network profile the rules apply to. 'Domain' means only networks where the
+# machine can reach a domain controller - Private and Public are left unticked.
+$FirewallProfile   = 'Domain'
 
 $FirewallRules = @(
     @{ DisplayName = 'AD Baseline - Allow ICMPv4 Echo (Ping)';  Direction = 'Inbound';  Protocol = 'ICMPv4'; IcmpType = 8;   Enabled = $true }
@@ -221,6 +224,7 @@ $FirewallRules = @(
 # 4. CLIENT-SIDE EXTENSIONS (do not edit unless Microsoft changes them)
 # ============================================================================
 $RegistryMachineCSE = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]"
+$FirewallMachineCSE = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{B05566AC-FE9C-4368-BE01-7A4CBB6CBA11}]"
 $RegistryUserCSE    = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F73-3407-48AE-BA88-E8213C6761F1}]"
 $SecurityMachineCSE = "[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]"
 
@@ -497,7 +501,7 @@ try {
     Write-Host "  Security Policy (GptTmpl.inf):" -ForegroundColor White
     if ($DisableCredentialCache) { Write-Info "[set]   Interactive logon: number of previous logons to cache = 0" }
     if ($EnableWinRM) { Write-Info "[set]   Service 'WinRM' start type = Automatic" }
-    if ($EnableFirewallRules) { Write-Info ("[set]   {0} firewall rules for group '{1}'" -f @($FirewallRules | Where-Object { $_.Enabled }).Count, $FirewallGroupName) }
+    if ($EnableFirewallRules) { Write-Info ("[set]   {0} firewall rules for group '{1}' (domain profile only)" -f @($FirewallRules | Where-Object { $_.Enabled }).Count, $FirewallGroupName) }
 
     Write-Host ""
     if (-not (Read-YesNo -Prompt "Apply these settings to the GPO '$GPOName'?")) {
@@ -584,15 +588,19 @@ try {
     Write-Step "5/6  Firewall rules in the GPO"
     $FirewallChanged = 0
     if ($EnableFirewallRules) {
-        $Session = $null
+        # The firewall cmdlets take a policy store written as '<FQDN domain>\<GPO name>'
+        # (or the GPO GUID). The NetBIOS name is refused with "The parameter is
+        # incorrect.", and Open-NetGPO has no -Name parameter - it takes -PolicyStore too.
+        $GpoStore = "$DomainFQDN\$GPOName"
+        $Session  = $null
         $GpoParam = @{}
         try {
-            $Session = Open-NetGPO -Name $GPOName -ErrorAction Stop
+            $Session  = Open-NetGPO -PolicyStore $GpoStore -ErrorAction Stop
             $GpoParam = @{ GPOSession = $Session }
         }
         catch {
-            Write-Warn "Open-NetGPO failed ($($_.Exception.Message)) - falling back to the GPO policy store."
-            $GpoParam = @{ PolicyStore = "$DomainNetBIOS\$GPOName" }
+            Write-Warn "Open-NetGPO failed ($($_.Exception.Message)) - writing straight to the policy store '$GpoStore'."
+            $GpoParam = @{ PolicyStore = $GpoStore }
         }
 
         try {
@@ -602,10 +610,30 @@ try {
                     continue
                 }
 
-                $Present = Get-NetFirewallRule @GpoParam -DisplayName $Rule.DisplayName -ErrorAction SilentlyContinue
+                $Present = $null
+                try { $Present = Get-NetFirewallRule @GpoParam -DisplayName $Rule.DisplayName -ErrorAction Stop }
+                catch { $Present = $null }
+
                 if ($Present) {
-                    Write-Info "already in the GPO: $($Rule.DisplayName)"
-                    $Script:ResultCounts.Unchanged++
+                    # A rule left by an earlier run may still carry the old profile
+                    # (Any = Domain + Private + Public). Narrow it to Domain only.
+                    $NowProfile = @($Present.Profile) -join ','
+                    if ($NowProfile -ne $FirewallProfile) {
+                        try {
+                            Set-NetFirewallRule @GpoParam -DisplayName $Rule.DisplayName -Profile $FirewallProfile -ErrorAction Stop | Out-Null
+                            Write-Ok "profile -> $FirewallProfile : $($Rule.DisplayName)"
+                            $FirewallChanged++
+                            $Script:ResultCounts.Changed++
+                        }
+                        catch {
+                            Write-Warn "FAILED to set profile: $($Rule.DisplayName) - $($_.Exception.Message)"
+                            $Script:ResultCounts.Failed++
+                        }
+                    }
+                    else {
+                        Write-Info "already in the GPO: $($Rule.DisplayName)"
+                        $Script:ResultCounts.Unchanged++
+                    }
                     continue
                 }
 
@@ -613,7 +641,7 @@ try {
                     DisplayName = $Rule.DisplayName
                     Direction   = $Rule.Direction
                     Action      = 'Allow'
-                    Profile     = 'Any'
+                    Profile     = $FirewallProfile
                     Enabled     = 'True'
                     Group       = $FirewallGroupName
                 }
@@ -627,10 +655,22 @@ try {
                 }
                 foreach ($Key in $GpoParam.Keys) { $Params[$Key] = $GpoParam[$Key] }
 
-                New-NetFirewallRule @Params -ErrorAction Stop | Out-Null
-                Write-Ok "created: $($Rule.DisplayName)"
-                $FirewallChanged++
-                $Script:ResultCounts.Changed++
+                # One bad rule must not stop the rest of the baseline.
+                try {
+                    New-NetFirewallRule @Params -ErrorAction Stop | Out-Null
+                    Write-Ok "created: $($Rule.DisplayName)"
+                    $FirewallChanged++
+                    $Script:ResultCounts.Changed++
+                }
+                catch {
+                    Write-Warn "FAILED: $($Rule.DisplayName) - $($_.Exception.Message)"
+                    $Script:ResultCounts.Failed++
+                }
+            }
+
+            if ($Session -and $FirewallChanged -gt 0) {
+                Save-NetGPO -GPOSession $Session -ErrorAction Stop
+                Write-Ok "Saved $FirewallChanged new firewall rule(s) into the GPO."
             }
         }
         catch {
@@ -638,23 +678,17 @@ try {
             $Script:ResultCounts.Failed++
         }
         finally {
+            # Closing is best effort: not every build ships a close cmdlet, and a
+            # session left open costs nothing once the script exits.
             if ($Session) {
-                try {
-                    if ($FirewallChanged -gt 0) {
-                        Save-NetGPO -GPOSession $Session -ErrorAction Stop
-                        Write-Ok "Saved $FirewallChanged new firewall rule(s) into the GPO."
-                    }
-                }
-                catch {
-                    Write-Warn "Save-NetGPO failed: $($_.Exception.Message)"
-                    $Script:ResultCounts.Failed++
-                }
-                finally {
+                if (Get-Command -Name 'Close-NetGPO' -ErrorAction SilentlyContinue) {
                     try { Close-NetGPO -GPOSession $Session } catch { }
                 }
+                $Session = $null
             }
         }
-        $Script:MachineVersionBump += $FirewallChanged
+        # The firewall cmdlets bump the GPO version in Active Directory themselves,
+        # so nothing is added here - step 6 only brings GPT.INI back in line.
     }
     else {
         Write-Info "Firewall baseline switched off in the configuration - nothing written."
@@ -668,6 +702,10 @@ try {
     $GpoAdsi = [ADSI]"LDAP://$GpoDn"
 
     $CseChanged = $false
+    if ($FirewallChanged -gt 0) {
+        if (Add-GpoClientSideExtension -GpoAdsi $GpoAdsi -Property 'gPCMachineExtensionNames' `
+                -Cse $FirewallMachineCSE -Label 'Windows Firewall policy') { $CseChanged = $true; $Script:MachineVersionBump += 1 }
+    }
     if ($GptChanged) {
         if (Add-GpoClientSideExtension -GpoAdsi $GpoAdsi -Property 'gPCMachineExtensionNames' `
                 -Cse $SecurityMachineCSE -Label 'Security policy (GptTmpl.inf)') { $CseChanged = $true }
@@ -688,12 +726,16 @@ try {
                 -Cse $RegistryUserCSE -Label 'Registry policy (user)') { $CseChanged = $true; $Script:MachineVersionBump += 65536 }
     }
 
-    if ($CseChanged -or $Script:MachineVersionBump -gt 0) {
+    if ($CseChanged -or $Script:MachineVersionBump -gt 0 -or $FirewallChanged -gt 0) {
+        # Read the version here, after the firewall writes, so the number the firewall
+        # cmdlets already bumped is kept instead of being counted twice.
         $OldVersion = [int]$GpoAdsi.Properties["versionNumber"].Value
         $NewVersion = $OldVersion + $Script:MachineVersionBump
-        $GpoAdsi.Properties["versionNumber"].Value = $NewVersion
-        $GpoAdsi.CommitChanges()
-        Write-Ok "GPO version: $OldVersion -> $NewVersion (bumps this run: $Script:MachineVersionBump)."
+        if ($NewVersion -ne $OldVersion) {
+            $GpoAdsi.Properties["versionNumber"].Value = $NewVersion
+            $GpoAdsi.CommitChanges()
+        }
+        Write-Ok "GPO version: $OldVersion -> $NewVersion (extra bumps this run: $Script:MachineVersionBump; firewall rules written: $FirewallChanged)."
 
         $GptIni = Join-Path $SysvolGpo "GPT.INI"
         if (Test-Path -LiteralPath $GptIni) {
@@ -714,7 +756,7 @@ try {
     }
 
     # ---- wait for SYSVOL replication -------------------------------------
-    if ($SysvolWaitSeconds -gt 0 -and $Script:MachineVersionBump -gt 0) {
+    if ($SysvolWaitSeconds -gt 0 -and ($Script:MachineVersionBump -gt 0 -or $FirewallChanged -gt 0)) {
         $DcHosts = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName)
         if ($DcHosts.Count -gt 1) {
             Write-Info "Waiting up to $SysvolWaitSeconds s for SYSVOL to reach $($DcHosts.Count) DCs..."
