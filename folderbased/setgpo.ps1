@@ -3,9 +3,10 @@
     Hardens workstations through an EXISTING Group Policy Object: locks regedit, wallpaper,
     lock screen image and the taskbar, turns off the Microsoft Store and Offline Files,
     stops Windows caching domain logons, turns on verbose logon messages, deletes stale
-    user profiles after 30 days, enables WinRM (plus compatibility mode) and fills the
-    GPO with a baseline set of inbound / outbound firewall rules, including ICMP so
-    domain-wide ping works.
+    user profiles after 30 days, shows only the user display name on a locked session,
+    puts the SOFTNET banner on the sign-in screen, enables WinRM (plus compatibility mode)
+    and fills the GPO with a baseline set of inbound / outbound firewall rules, including
+    ICMP so domain-wide ping works.
 
 .DESCRIPTION
     Steps:
@@ -15,8 +16,9 @@
       3. Write the User Configuration and Computer Configuration registry policies into
          the GPO's registry.pol through the Group Policy cmdlets - each setting is read
          first, so a second run changes nothing.
-      4. Merge the two Security Policy entries into GptTmpl.inf (CachedLogonsCount and the
-         WinRM service start type), keeping every other line of that file untouched.
+      4. Merge the Security Policy entries into GptTmpl.inf (CachedLogonsCount, the WinRM
+         service start type and the three interactive logon Security Options), keeping
+         every other line of that file untouched.
       5. Create the firewall rules inside the GPO itself, so clients receive them.
       6. Bump the GPO version only for the file-based changes, sync GPT.INI, wait for SYSVOL.
 
@@ -79,6 +81,17 @@ $EnableVerboseStatus   = $true         # "Display highly detailed status message
 $DisableCredentialCache = $true        # No cached domain logons (CachedLogonsCount = 0)
 $EnableProfileCleanup  = $true         # Delete stale user profiles on restart
 $ProfileCleanupDays    = 30            # How old a profile must be before deletion
+
+# Interactive logon screen (Computer Configuration > Windows Settings > Security Settings
+# > Local Policies > Security Options). All three are Security Options, so all three go
+# into GptTmpl.inf: that is the only place GPMC's Security Options page reads them from.
+# Written as registry policy values they showed as 'Not Defined' on that page.
+$SetLockedUserDisplay  = $true         # Locked session shows ONLY the user display name
+$SetLogonBanner        = $true         # Banner shown before anybody signs in
+$LogonBannerTitle      = 'Good Day, SOFTNETIZENS!'
+$LogonBannerText       = @'
+README: Good day, SOFTNETIZEN! Please ensure that the computer table area is clean. The computer must be properly turned off (DO NOT TURN IT OFF DIRECTLY VIA THE AVR). Chairs and drawers must be returned to their proper positions after use., NOTE: To save files, paste it on the Desktop Folder., Failure to read this means di ka nagbabasa. Please pakibasa 'to. Thanks.
+'@
 
 # WinRM + firewall
 $EnableWinRM           = $true         # WinRM service auto-start + listens on the network
@@ -196,6 +209,9 @@ $ComputerPolicySettings = @(
         Value    = 1
         Enabled  = $EnableWinRMBasicAuth
     }
+    # NOTE: the locked-session display name and the logon banner title/text are NOT in
+    # this list. They are Security Options, so they are written into GptTmpl.inf in
+    # step 4 - see the comment there.
 )
 
 # ============================================================================
@@ -355,9 +371,13 @@ function Set-IniEntry {
         if ($Lines[$i] -match '^\s*\[') { $End = $i - 1; break }
     }
 
+    # Quotes are removed before comparing so a line written by an older version of
+    # this script (WinRM,2,A) is still recognised next to the correct one ("WinRM",2,"")
     $Found = -1
+    $Prefix = ($MatchPrefix -replace '"', '').ToUpperInvariant()
     for ($i = $SectionIndex + 1; $i -le $End; $i++) {
-        if ($Lines[$i].TrimStart().ToUpperInvariant().StartsWith($MatchPrefix.ToUpperInvariant())) { $Found = $i; break }
+        $Probe = ($Lines[$i].TrimStart() -replace '"', '').ToUpperInvariant()
+        if ($Probe.StartsWith($Prefix)) { $Found = $i; break }
     }
 
     if ($Found -ge 0) {
@@ -369,6 +389,40 @@ function Set-IniEntry {
     $Before = if ($InsertAt -gt 0) { @($Lines[0..($InsertAt - 1)]) } else { @() }
     $After = if ($InsertAt -lt $Lines.Count) { @($Lines[$InsertAt..($Lines.Count - 1)]) } else { @() }
     return @($Before) + @($NewLine) + @($After)
+}
+
+function Remove-IniEntry {
+    # Drops every "key=value" line that matches a prefix from one section of a flat
+    # line array, leaving every other section and line exactly as it was.
+    param(
+        [string[]]$Lines,
+        [string]$Section,
+        [string]$MatchPrefix
+    )
+
+    $Lines = @($Lines)
+    $SectionPattern = '^\s*\[' + [regex]::Escape($Section) + '\]\s*$'
+    $SectionIndex = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $SectionPattern) { $SectionIndex = $i; break }
+    }
+    if ($SectionIndex -lt 0) { return $Lines }
+
+    $End = $Lines.Count - 1
+    for ($i = $SectionIndex + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^\s*\[') { $End = $i - 1; break }
+    }
+
+    $Prefix = ($MatchPrefix -replace '"', '').ToUpperInvariant()
+    $Keep = @()
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($i -ge ($SectionIndex + 1) -and $i -le $End) {
+            $Probe = ($Lines[$i].TrimStart() -replace '"', '').ToUpperInvariant()
+            if ($Probe.StartsWith($Prefix)) { continue }
+        }
+        $Keep += $Lines[$i]
+    }
+    return $Keep
 }
 
 function Read-GptTmplLines {
@@ -501,6 +555,16 @@ try {
     Write-Host "  Security Policy (GptTmpl.inf):" -ForegroundColor White
     if ($DisableCredentialCache) { Write-Info "[set]   Interactive logon: number of previous logons to cache = 0" }
     if ($EnableWinRM) { Write-Info "[set]   Service 'WinRM' start type = Automatic" }
+    if ($SetLockedUserDisplay) { Write-Info "[set]   Interactive logon: display user information when the session is locked = User display name only" }
+    else { Write-Info "[skip]  Interactive logon: display user information when the session is locked" }
+    if ($SetLogonBanner) {
+        $TitlePreview = ($LogonBannerTitle -replace "(`r`n|`n|`r)", ' / ')
+        $TextPreview  = ($LogonBannerText  -replace "(`r`n|`n|`r)", ' / ')
+        if ($TextPreview.Length -gt 70) { $TextPreview = $TextPreview.Substring(0, 70) + '...' }
+        Write-Info ("[set]   Interactive logon: message title = '{0}'" -f $TitlePreview)
+        Write-Info ("[set]   Interactive logon: message text = {0}" -f $TextPreview)
+    }
+    else { Write-Info "[skip]  Interactive logon: message title and text" }
     if ($EnableFirewallRules) { Write-Info ("[set]   {0} firewall rules for group '{1}' (domain profile only)" -f @($FirewallRules | Where-Object { $_.Enabled }).Count, $FirewallGroupName) }
 
     Write-Host ""
@@ -550,7 +614,7 @@ try {
     $SecEditDir  = Split-Path -Parent $GptTmplPath
     $GptChanged  = $false
 
-    if (($DisableCredentialCache -or $EnableWinRM)) {
+    if (($DisableCredentialCache -or $EnableWinRM -or $SetLogonBanner -or $SetLockedUserDisplay)) {
         $Lines = Read-GptTmplLines -Path $GptTmplPath
         $OriginalText = ($Lines -join "`r`n")
 
@@ -560,19 +624,106 @@ try {
                 -MatchPrefix 'MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\CachedLogonsCount=' `
                 -NewLine 'MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\CachedLogonsCount=1,"0"'
         }
+        if ($SetLockedUserDisplay) {
+            # 'User display name only'. 4 = REG_DWORD; the value is 1 = domain and user
+            # name as well, 2 = user display name only, 3 = no user information at all.
+            # secedit accepts this Registry Values line, and it is what the Security
+            # Options page displays instead of 'Not Defined'.
+            $Lines = Set-IniEntry -Lines $Lines -Section 'Registry Values' `
+                -MatchPrefix 'MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLockedUserId=' `
+                -NewLine 'MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLockedUserId=4,2'
+        }
+        if ($SetLogonBanner) {
+            # The logon banner is a Security Option, so it belongs here and not in the
+            # registry policy (a registry.pol value shows as 'Not Defined' on that page).
+            #
+            # The page reads only the paths listed in C:\Windows\Inf\sceregvl.inf, and
+            # for the banner that is ...\CurrentVersion\Policies\System, which Winlogon
+            # also honours. Only that one path is written, so the template holds a
+            # single copy of the banner.
+            # Title: 1 = REG_SZ. Text: 7 = REG_MULTI_SZ, so every line of the message is
+            # its own quoted item - a line break inside the quotes makes Windows reject
+            # the whole template.
+            $BannerQuotes = { param($s) ([string]$s -replace '"', '""') }
+            $TitleValue = (@([string]$LogonBannerTitle -split "`r`n|`n|`r") |
+                Where-Object { $_ -ne '' } |
+                ForEach-Object { '"' + (& $BannerQuotes $_) + '"' }) -join ','
+            $TextValue = (@([string]$LogonBannerText -split "`r`n|`n|`r") |
+                ForEach-Object { '"' + (& $BannerQuotes $_) + '"' }) -join ','
+            $BannerPath = 'MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\'
+            $Lines = Set-IniEntry -Lines $Lines -Section 'Registry Values' `
+                -MatchPrefix ($BannerPath + 'LegalNoticeCaption=') `
+                -NewLine ($BannerPath + 'LegalNoticeCaption=1,' + $TitleValue)
+            $Lines = Set-IniEntry -Lines $Lines -Section 'Registry Values' `
+                -MatchPrefix ($BannerPath + 'LegalNoticeText=') `
+                -NewLine ($BannerPath + 'LegalNoticeText=7,' + $TextValue)
+
+            # An earlier run also put the banner under the legacy Winlogon path. Two
+            # copies of one setting only get in each other's way, so that line is
+            # dropped now that Security Options holds it.
+            $LegacyBannerPath = 'MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\'
+            $Lines = Remove-IniEntry -Lines $Lines -Section 'Registry Values' -MatchPrefix ($LegacyBannerPath + 'LegalNoticeCaption=')
+            $Lines = Remove-IniEntry -Lines $Lines -Section 'Registry Values' -MatchPrefix ($LegacyBannerPath + 'LegalNoticeText=')
+        }
         if ($EnableWinRM) {
+            # Windows only accepts the quoted form "Service",startType,"SDDL"
             # Startup mode: 2 = Automatic, 3 = Manual, 4 = Disabled
+            # An unquoted line (WinRM,2,A) makes Windows refuse the WHOLE template, and
+            # GPMC then says 'Security Settings = Windows cannot open template file.'
             $Lines = Set-IniEntry -Lines $Lines -Section 'Service General Setting' `
-                -MatchPrefix 'WinRM,' -NewLine 'WinRM,2,A'
+                -MatchPrefix 'WinRM,' -NewLine '"WinRM",2,""'
+        }
+
+        # An older version of this script wrote the banner and the locked-session
+        # display name as registry policy values. Two copies of one setting fight each
+        # other, so drop the old copy of any setting this run now owns.
+        $StaleRegistryOptions = @(
+            @{ Name = 'LegalNoticeCaption';      Enabled = $SetLogonBanner }
+            @{ Name = 'LegalNoticeText';         Enabled = $SetLogonBanner }
+            @{ Name = 'DontDisplayLockedUserId'; Enabled = $SetLockedUserDisplay }
+        )
+        foreach ($StaleOption in $StaleRegistryOptions) {
+            if (-not $StaleOption.Enabled) { continue }
+            $StaleName = $StaleOption.Name
+            # Both keys are checked: older versions of this script used the legacy
+            # Winlogon key, later ones the Policies\System key.
+            $StaleKeys = @(
+                'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+                'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+            )
+            foreach ($StaleKey in $StaleKeys) {
+                if (Get-GPRegistryValue -Name $GPOName -Key $StaleKey -ValueName $StaleName -ErrorAction SilentlyContinue) {
+                    try {
+                        Remove-GPRegistryValue -Name $GPOName -Key $StaleKey -ValueName $StaleName -ErrorAction Stop
+                        Write-Ok "removed the old registry policy copy of $StaleName (it is a Security Option, now held in GptTmpl.inf)."
+                    }
+                    catch {
+                        Write-Warn "Could not remove the old registry copy of $StaleName - remove it by hand: unset '$StaleKey\$StaleName' in the GPO's registry policy."
+                    }
+                }
+            }
         }
 
         $NewText = ($Lines -join "`r`n")
         if ($NewText -ne $OriginalText) {
             if (-not (Test-Path -LiteralPath $SecEditDir)) { New-Item -Path $SecEditDir -ItemType Directory -Force | Out-Null }
-            [System.IO.File]::WriteAllText($GptTmplPath, ($NewText + "`r`n"),
-                (New-Object System.Text.UnicodeEncoding($false, $true)))
+            $TmplEncoding = New-Object System.Text.UnicodeEncoding($false, $true)
+            [System.IO.File]::WriteAllText($GptTmplPath, ($NewText + "`r`n"), $TmplEncoding)
+
+            # Ask Windows itself whether the template is readable; undo it if not.
+            $ValidateOut = & secedit.exe /validate $GptTmplPath 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                [System.IO.File]::WriteAllText($GptTmplPath, ($OriginalText + "`r`n"), $TmplEncoding)
+                throw "Windows refused the edited security template, so the previous version was put back. secedit said: $(($ValidateOut | Where-Object { $_ -match 'Error|incorrect|invalid' }) -join ' ')"
+            }
+
             $GptChanged = $true
-            Write-Ok "GptTmpl.inf updated: CachedLogonsCount$(if ($DisableCredentialCache) { '=0' }); WinRM service$(if ($EnableWinRM) { ' = Automatic' })."
+            $Written = @()
+            if ($DisableCredentialCache) { $Written += 'CachedLogonsCount=0' }
+            if ($EnableWinRM) { $Written += 'WinRM service = Automatic' }
+            if ($SetLogonBanner) { $Written += 'logon banner title and text' }
+            if ($SetLockedUserDisplay) { $Written += 'locked-session display name only' }
+            Write-Ok ("GptTmpl.inf updated: {0}." -f ($Written -join '; '))
         }
         else {
             Write-Info "GptTmpl.inf already had these entries - left untouched."
@@ -790,6 +941,8 @@ try {
     Write-Info "4. 'Get-NetFirewallRule -DisplayName ''AD Baseline*''' on the client lists the rules from the GPO."
     Write-Info "5. 'Test-WSMan <client>' or 'winrm qc' from an admin PC proves WinRM; 'ping <client>' proves ICMP."
     Write-Info "6. Security policy: run 'net accounts' - 'Logon hours / logon limit' section shows it; walk 'secpol.msc' for the cache setting."
+    Write-Info "7. Lock the screen and sign out: the banner title/text appear, and only the display name is shown for a locked session."
+    Write-Info "8. In the GPO itself: Security Options lists the banner and 'Interactive logon: Display user information when the session is locked' as set, not 'Not Defined'."
     if ($Script:ResultCounts.Failed -gt 0) {
         Write-Warn "$($Script:ResultCounts.Failed) setting(s) could not be written - see the !! lines above."
     }
