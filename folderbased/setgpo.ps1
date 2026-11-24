@@ -108,6 +108,7 @@ $EnableRdpInbound      = $false        # Remote Desktop rule (TCP 3389 inbound)
 $EnableUsbAudit        = $true         # Log every device plugged in and unplugged
 $EnableUsbFileAccess   = $false        # Also log file reads/writes on removable disks (VERY noisy)
 $EnableUsbDriverLog    = $true         # Turn on the USB driver log (holds the serial numbers)
+$OfferUsbCollector     = $true         # After the GPO work, ask whether to set up the collector here
 
 $AuditSettings = @(
     @{
@@ -659,6 +660,9 @@ try {
     else { Write-Info "[skip]  USB plug / unplug auditing" }
     if ($EnableUsbDriverLog) { Write-Info "[set]   USB driver log switched on (plug and unplug with device serial number)" }
     else { Write-Info "[skip]  USB driver log" }
+    if ($OfferUsbCollector -and $EnableUsbAudit) {
+        Write-Info "[ask]   After the GPO is written: set up the USB event collector on this server? (y/N)"
+    }
 
     Write-Host ""
     if (-not (Read-YesNo -Prompt "Apply these settings to the GPO '$GPOName'?")) {
@@ -1071,6 +1075,35 @@ try {
         }
     }
 
+    # ---- Optional: the USB event collector on this server ----------------
+    # The GPO only makes every client write the events into its OWN log. The
+    # subscription that pulls them together lives on this server and is built by
+    # New-UsbEventCollector.ps1. It is offered here so one run can do both.
+    if ($OfferUsbCollector -and ($EnableUsbAudit -or $AuditChanged)) {
+        $CollectorPath = Join-Path $PSScriptRoot 'New-UsbEventCollector.ps1'
+        if (-not (Test-Path -LiteralPath $CollectorPath)) {
+            Write-Warn "Collector script not found next to this script ($CollectorPath) - skipped."
+        }
+        else {
+            Write-Host ""
+            if (Read-YesNo -Prompt "Set up the USB event collector on this server now? (pulls the USB events from every client into one log)") {
+                Write-Step "Extra: USB event collector on this server"
+                # Run it as a child process so its 'exit' cannot end this script, and so
+                # its own Read-Host questions land in this same window.
+                $HostExe = (Get-Process -Id $PID).Path
+                if ([string]::IsNullOrWhiteSpace($HostExe)) { $HostExe = 'powershell.exe' }
+                & $HostExe -NoProfile -ExecutionPolicy Bypass -File $CollectorPath
+                if ($LASTEXITCODE -eq 0) { Write-Ok "USB event collector set up - see the steps it printed above." }
+                else {
+                    Write-Warn "The collector stopped with code $LASTEXITCODE. The GPO part above is already saved - fix what it printed, then run New-UsbEventCollector.ps1 again."
+                }
+            }
+            else {
+                Write-Info "Collector skipped - only the GPO was written. Run New-UsbEventCollector.ps1 on this server whenever you want it."
+            }
+        }
+    }
+
     # ---- Done ------------------------------------------------------------
     $AuthUsersName = Get-SidName -Sid $SidAuthenticatedUsers
     Write-Host "`n=== Finished in $([int]((Get-Date) - $StartTime).TotalSeconds)s ===" -ForegroundColor Green
@@ -1091,7 +1124,7 @@ try {
     if ($AuditChanged) {
         Write-Info "9. USB logging: plug a flash drive into a client, wait a minute, then open Event Viewer > Windows Logs > Security and look for event 6416 (device connected / disconnected)."
         Write-Info "10. The serial number is in Event Viewer > Applications and Services Logs > Microsoft > Windows > DriverFrameworks-UserMode > Operational (events 2003 / 2100 / 2102)."
-        Write-Info "11. Nothing is collected centrally yet - run New-UsbEventCollector.ps1 ONCE on this server to pull the events from every client into one log."
+        Write-Info "11. For one central list: this run asks at the end whether to set up New-UsbEventCollector.ps1 here (answer y) - it pulls the events from every client into one log."
     }
     if ($Script:ResultCounts.Failed -gt 0) {
         Write-Warn "$($Script:ResultCounts.Failed) setting(s) could not be written - see the !! lines above."
