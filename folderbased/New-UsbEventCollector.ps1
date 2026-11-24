@@ -33,6 +33,23 @@ $SubscriptionName = 'USB Device Watch'
 # You can also paste computer names here, or a path to a text file with one name per line.
 $ComputerList     = ''
 
+# How the run-time question looks:
+#   $true  = a window listing every domain computer; tick the rows, then press OK
+#   $false = a numbered list in the console (type 3,5,8 or 3-7 or all)
+# If the window cannot open, the numbered list is used anyway.
+$UseGridView      = $true
+
+# Only offer computers from certain OUs. Separate several with a semicolon,
+# for example 'CET;ICT12-PERL' or a full OU distinguished name.
+#   ''  = the script asks you to pick an OU at run time
+#   '-' = the whole domain, no OU question
+$OuFilter         = ''
+
+# When an OU is picked, also take the computers in its sub-OUs.
+#   $true  = the whole branch (CET plus everything under it)
+#   $false = only computers sitting directly in that one OU
+$IncludeSubOus    = $true
+
 # Events to collect from each client. Two logs are read:
 #   Security                            -> 6416 = device connected / disconnected
 #   ...DriverFrameworks-UserMode/Operational -> 2003 / 2100 / 2101 / 2102 = the device
@@ -57,6 +74,28 @@ function Write-Step { param([string]$Text) Write-Host "`n[+] $Text" -ForegroundC
 function Write-Ok   { param([string]$Text) Write-Host "    OK  $Text" -ForegroundColor Green }
 function Write-Info { param([string]$Text) Write-Host "        $Text" -ForegroundColor Gray }
 function Write-Warn { param([string]$Text) Write-Host "    !!  $Text" -ForegroundColor Yellow }
+
+# Is this computer inside that OU? With children, any level below it counts.
+function Test-ComputerInOu {
+    param([string]$ComputerDn, [string]$OuDn, [bool]$WithChildren)
+    if ([string]::IsNullOrWhiteSpace($ComputerDn) -or [string]::IsNullOrWhiteSpace($OuDn)) { return $false }
+    if ($WithChildren) {
+        return $ComputerDn.EndsWith(',' + $OuDn, 'OrdinalIgnoreCase')
+    }
+    # Only the OU the computer sits in directly: CN=PC01,OU=CET,...
+    $Parts = $ComputerDn.Split([char[]]@(','), 2)
+    if ($Parts.Count -lt 2) { return $false }
+    return $Parts[1].Equals($OuDn, 'OrdinalIgnoreCase')
+}
+
+# OU distinguished name turned into a readable path: SOFTNET\Computer Lab\CET
+function Get-OuLabel {
+    param([string]$Dn)
+    $Names = @($Dn -split ',' | Where-Object { $_ -match '^OU=' } | ForEach-Object { $_ -replace '^OU=', '' })
+    if ($Names.Count -eq 0) { return $Dn }
+    [array]::Reverse($Names)
+    return ($Names -join '\')
+}
 
 function Read-YesNo {
     param([string]$Prompt)
@@ -109,25 +148,254 @@ try {
         Write-Info "From the configuration list: $($Targets.Count) computer(s)."
     }
     else {
-        $Suggestion = ''
+        $DomainComputers = @()
+        $AllComputers = @()
         try {
-            $Suggestion = @(Get-ADComputer -Filter { Enabled -eq $true } -ErrorAction Stop |
+            $AllComputers = @(Get-ADComputer -Filter { Enabled -eq $true } -Property DistinguishedName -ErrorAction Stop |
                 Where-Object { $_.Name -ne $env:COMPUTERNAME } |
-                Select-Object -ExpandProperty Name) -join ','
+                Sort-Object Name)
         }
-        catch { $Suggestion = '' }
+        catch {
+            throw "Active Directory could not be read ($($_.Exception.Message)). Put the computer names in the configuration list at the top of this script, separated by commas."
+        }
+        if ($AllComputers.Count -eq 0) {
+            throw "Active Directory returned no enabled computers besides this server - nothing to collect from."
+        }
 
-        Write-Info "Type the computer names, separated by commas."
-        if ($Suggestion) {
-            Write-Info "Blank = every enabled computer in the domain except this server ($((@($Suggestion -split ',')).Count) found)."
+        # --- step 2a: narrow the list to one or more OUs first ---
+        $OuDns       = @()
+        $WholeDomain = $false
+        $NeedOuQuestion = $true
+
+        if ($OuFilter -eq '-') {
+            $WholeDomain = $true
+            $NeedOuQuestion = $false
+            Write-Info "OU filter is '-' - the whole domain will be offered."
         }
-        $Answer = Read-Host "Computer names"
-        if ([string]::IsNullOrWhiteSpace($Answer)) {
-            if (-not $Suggestion) { throw "No computer names were given and Active Directory could not be read. Put the names in the prompt, one list separated by commas." }
-            $Targets = @($Suggestion -split ',')
+
+        if ($NeedOuQuestion) {
+            # Every OU that holds at least one enabled computer
+            $DirectOus = @{}
+            foreach ($C in $AllComputers) {
+                $Dn = [string]$C.DistinguishedName
+                if ([string]::IsNullOrWhiteSpace($Dn)) { continue }
+                $Parts = $Dn.Split([char[]]@(','), 2)
+                if ($Parts.Count -lt 2 -or -not $Parts[1].StartsWith('OU=')) { continue }
+                $DirectOus[$Parts[1]] = $true
+            }
+
+            $OuRows = @()
+            foreach ($OuDn in $DirectOus.Keys) {
+                $Count = @($AllComputers | Where-Object {
+                        Test-ComputerInOu -ComputerDn ([string]$_.DistinguishedName) -OuDn $OuDn -WithChildren $IncludeSubOus
+                    }).Count
+                if ($Count -gt 0) {
+                    $OuRows += [pscustomobject]@{ OU = (Get-OuLabel $OuDn); Computers = $Count; DN = $OuDn }
+                }
+            }
+            $OuRows = @($OuRows | Sort-Object OU)
+            if ($OuRows.Count -eq 0) {
+                throw "No enabled computer sits in an OU, so there is nothing to filter by."
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($OuFilter)) {
+                # OUs given in the configuration: names or distinguished names
+                $Wanted = @($OuFilter -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                foreach ($W in $Wanted) {
+                    if ($W -match '^OU=') { $OuDns += $W; continue }
+                    $Hit = @($OuRows | Where-Object { $_.OU -eq $W -or $_.OU.EndsWith('\' + $W, 'OrdinalIgnoreCase') })
+                    if ($Hit.Count -eq 0) { Write-Warn "No enabled computer found in OU '$W' - left out." }
+                    else { $OuDns += @($Hit | ForEach-Object { $_.DN }) }
+                }
+                $OuDns = @($OuDns | Sort-Object -Unique)
+                if ($OuDns.Count -eq 0) {
+                    throw "None of the OUs in the configuration (OuFilter = '$OuFilter') hold an enabled computer."
+                }
+            }
+            else {
+                Write-Info "Pick the OU(s) to take computers from - their computers are listed right after you pick."
+                $OuChosen = @()
+
+                if ($UseGridView -and (Get-Command -Name 'Out-GridView' -ErrorAction SilentlyContinue)) {
+                    try {
+                        $OuChosen = @($OuRows |
+                            Out-GridView -Title 'Tick the OU(s) to collect USB events from (Ctrl+A ticks all), then press OK' -OutputMode Multiple -ErrorAction Stop)
+                    }
+                    catch {
+                        Write-Warn "The OU window could not open - showing the numbered list instead."
+                        $OuChosen = @()
+                    }
+                }
+
+                if ($OuChosen.Count -gt 0) {
+                    $OuDns = @($OuChosen | ForEach-Object { $_.DN })
+                }
+                else {
+                    # The list is shown, you pick, and that OU's computers appear at once.
+                    while ($true) {
+                        Write-Info "Examples: 1   |   1,3   |   all   |   or type an OU name"
+                        Write-Info "Blank = every OU (the whole domain)."
+                        $Number = 0
+                        foreach ($Row in $OuRows) {
+                            $Number++
+                            Write-Host ("        [{0,2}]  {1,-45} {2,3} computer(s)" -f $Number, $Row.OU, $Row.Computers) -ForegroundColor DarkGray
+                        }
+                        $Answer = Read-Host "OU number"
+                        if ([string]::IsNullOrWhiteSpace($Answer) -or $Answer.Trim() -match '^(all|\*)$') {
+                            $WholeDomain = $true
+                            break
+                        }
+
+                        $Picked = New-Object System.Collections.Generic.List[string]
+                        foreach ($Piece in ($Answer -split '[,;]')) {
+                            $Piece = $Piece.Trim()
+                            if (-not $Piece) { continue }
+                            $Num = 0
+                            if ([int]::TryParse($Piece, [ref]$Num) -and $Num -ge 1 -and $Num -le $OuRows.Count) {
+                                $Picked.Add($OuRows[$Num - 1].DN)
+                            }
+                            else {
+                                $Hit = @($OuRows | Where-Object { $_.OU -eq $Piece -or $_.OU.EndsWith('\' + $Piece, 'OrdinalIgnoreCase') })
+                                if ($Hit.Count -gt 0) { foreach ($H in $Hit) { $Picked.Add($H.DN) } }
+                                else { Write-Warn "'$Piece' is not in the list - left out." }
+                            }
+                        }
+                        $Picked = @($Picked | Sort-Object -Unique)
+                        if ($Picked.Count -eq 0) {
+                            Write-Warn "That was not an OU in the list. Try again, or type 'all' for the whole domain."
+                            continue
+                        }
+
+                        # --- show the computers sitting in the OU(s) just picked ---
+                        $OuDns = $Picked
+                        $InPick = @($AllComputers | Where-Object {
+                                $Dn = [string]$_.DistinguishedName
+                                $Inside = $false
+                                foreach ($O in $OuDns) {
+                                    if (Test-ComputerInOu -ComputerDn $Dn -OuDn $O -WithChildren $IncludeSubOus) { $Inside = $true; break }
+                                }
+                                $Inside
+                            })
+                        Write-Ok "$($InPick.Count) computer(s) inside the OU(s) you picked:"
+                        foreach ($C in $InPick) {
+                            Write-Host ("            {0,-22} {1}" -f $C.Name, $C.DistinguishedName) -ForegroundColor DarkGray
+                        }
+                        if ($InPick.Count -eq 0) {
+                            Write-Warn "That OU holds no enabled computer apart from this server - nothing to collect from."
+                            $OuDns = @()
+                            continue
+                        }
+                        if (Read-YesNo "Collect only from these $($InPick.Count) computer(s)?") { break }
+                        Write-Info "Fine - pick again from the OU list above."
+                        $OuDns = @()
+                        $WholeDomain = $false
+                    }
+                }
+            }
+        }
+
+        # --- keep only the computers inside the chosen OU(s) ---
+        if ($WholeDomain) {
+            $DomainComputers = @($AllComputers)
+            Write-Info "Whole domain: $($DomainComputers.Count) enabled computer(s)."
         }
         else {
-            $Targets = @($Answer -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($IncludeSubOus) { Write-Info "The chosen OU(s) include their sub-OUs." }
+            else { Write-Info "Only computers sitting directly in the chosen OU(s)." }
+            foreach ($O in $OuDns) { Write-Info "OU: $(Get-OuLabel $O)" }
+            $DomainComputers = @($AllComputers | Where-Object {
+                    $Dn = [string]$_.DistinguishedName
+                    $Inside = $false
+                    foreach ($O in $OuDns) {
+                        if (Test-ComputerInOu -ComputerDn $Dn -OuDn $O -WithChildren $IncludeSubOus) { $Inside = $true; break }
+                    }
+                    $Inside
+                })
+            if ($DomainComputers.Count -eq 0) {
+                throw "The chosen OU(s) hold no enabled computer besides this server - nothing to collect from."
+            }
+            Write-Info "In the chosen OU(s): $($DomainComputers.Count) computer(s)."
+        }
+
+        $Chosen = @()
+
+        # --- first choice: a window with one row per computer ---
+        if ($UseGridView -and (Get-Command -Name 'Out-GridView' -ErrorAction SilentlyContinue)) {
+            try {
+                $Chosen = @($DomainComputers |
+                    Select-Object @{ n = 'Computer'; e = { $_.Name } },
+                                  @{ n = 'DNS name'; e = { $_.DNSHostName } },
+                                  @{ n = 'Container'; e = { $_.DistinguishedName } } |
+                    Out-GridView -Title 'Tick the computers to collect USB events from (Ctrl+A ticks all), then press OK' -OutputMode Multiple -ErrorAction Stop)
+            }
+            catch {
+                Write-Warn "The picker window could not open - showing the numbered list instead."
+                $Chosen = @()
+            }
+        }
+
+        if ($Chosen.Count -gt 0) {
+            $Targets = @($Chosen | ForEach-Object { $_.Computer })
+            Write-Info "Ticked in the window: $($Targets.Count) computer(s)."
+        }
+        else {
+            # --- second choice: a numbered list in the console ---
+            Write-Info "Pick the computers by number."
+            Write-Info "Examples: 3,5,8   |   3-7   |   all   |   or type a computer name"
+            Write-Info "Blank = every computer in the OU(s) above ($($DomainComputers.Count) found) - you are asked first."
+            $Number = 0
+            foreach ($C in $DomainComputers) {
+                $Number++
+                Write-Host ("        [{0,2}]  {1}" -f $Number, $C.Name) -ForegroundColor DarkGray
+            }
+            $Answer = Read-Host "Numbers"
+
+            if ($Answer.Trim() -match '^(all|\*)$') {
+                $Targets = @($DomainComputers | Select-Object -ExpandProperty Name)
+            }
+            elseif ([string]::IsNullOrWhiteSpace($Answer)) {
+                # Blank no longer means 'everything' on its own - it has to be confirmed.
+                if (Read-YesNo "Take all $($DomainComputers.Count) computer(s) in the OU(s) above?") {
+                    $Targets = @($DomainComputers | Select-Object -ExpandProperty Name)
+                }
+                else {
+                    throw "No computer was picked, so nothing was collected. Run the script again and pick the computers by number."
+                }
+            }
+            else {
+                $Pick = New-Object System.Collections.Generic.List[string]
+                foreach ($Piece in ($Answer -split '[,;]')) {
+                    $Piece = $Piece.Trim()
+                    if (-not $Piece) { continue }
+
+                    $RangeMatch = [regex]::Match($Piece, '^(\d+)\s*-\s*(\d+)$')
+                    $SingleMatch = [regex]::Match($Piece, '^(\d+)$')
+
+                    if ($RangeMatch.Success) {
+                        $From = [int]$RangeMatch.Groups[1].Value
+                        $To   = [int]$RangeMatch.Groups[2].Value
+                        if ($From -gt $To) { $Swap = $From; $From = $To; $To = $Swap }
+                        for ($i = $From; $i -le $To; $i++) {
+                            if ($i -ge 1 -and $i -le $DomainComputers.Count) {
+                                $Pick.Add($DomainComputers[$i - 1].Name)
+                            }
+                            else { Write-Warn "Number $i is not in the list - left out." }
+                        }
+                    }
+                    elseif ($SingleMatch.Success) {
+                        $i = [int]$SingleMatch.Groups[1].Value
+                        if ($i -ge 1 -and $i -le $DomainComputers.Count) {
+                            $Pick.Add($DomainComputers[$i - 1].Name)
+                        }
+                        else { Write-Warn "Number $i is not in the list - left out." }
+                    }
+                    else {
+                        # Not a number, so treat it as a computer name typed by hand.
+                        $Pick.Add($Piece)
+                    }
+                }
+                $Targets = @($Pick)
+            }
         }
     }
     $Targets = @($Targets | Sort-Object -Unique)
