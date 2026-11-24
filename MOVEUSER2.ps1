@@ -658,7 +658,15 @@ function Move-ADUserToOU {
     $hasMatch = Show-ADUserMatch -FullName $FullName -Match $matchState
 
     # --- Yes/no confirmation for this one user ---
-    $approved = Confirm-UserAction -Action 'move this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail "From: $currentOU -> To: $TargetOUPath" -Default 'y'
+    # Asked only when another account with a similar name exists; a clean match moves on.
+    # The batch-level "Type 'YES'" gate before this loop still guards the whole run.
+    if ($hasMatch) {
+        $approved = Confirm-UserAction -Action 'move this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail "From: $currentOU -> To: $TargetOUPath" -Default 'y'
+    }
+    else {
+        Write-Host "  OK (no similar account found) - moving without asking" -ForegroundColor Green
+        $approved = $true
+    }
 
     if (-not $approved) {
         Write-Host "  SKIPPED: you answered no. User was not moved." -ForegroundColor Yellow

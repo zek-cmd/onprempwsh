@@ -252,7 +252,15 @@ function Reset-ADUserPassword {
     $hasMatch = Show-ADUserMatch -FullName $FullName -Match $matchState
 
     # --- Yes/no confirmation for this one user ---
-    $approved = Confirm-UserAction -Action 'reset the password of this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail "New password will be: $Password" -Default 'y'
+    # Asked only when another account with a similar name exists; a clean match resets on.
+    # The batch-level "Type 'YES'" gate before this loop still guards the whole run.
+    if ($hasMatch) {
+        $approved = Confirm-UserAction -Action 'reset the password of this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail "New password will be: $Password" -Default 'y'
+    }
+    else {
+        Write-Host "  OK (no similar account found) - resetting without asking" -ForegroundColor Green
+        $approved = $true
+    }
 
     if (-not $approved) {
         Write-Host "  SKIPPED: you answered no. Password was not reset." -ForegroundColor Yellow

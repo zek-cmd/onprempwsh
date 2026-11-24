@@ -758,14 +758,27 @@ function Move-ADUserToOU {
     Write-Host "  Target Location: $TargetOUPath" -ForegroundColor Yellow
     
     # --- Yes/no confirmation for this one user, before any move ---
+    # Asked only when another account with a similar name exists; a clean match moves on.
+    # The batch-level "Type 'YES'" gate before this loop still guards the whole run.
+    $matchState = Get-ADUserMatch -FullName $FullName -Username $adUser.SamAccountName -ExcludeSamAccountName $adUser.SamAccountName
+    if ($matchState.HadError) {
+        Write-Host "  WARNING: Active Directory could not be searched for similar names." -ForegroundColor Yellow
+    }
+    $hasMatch = Show-ADUserMatch -FullName $FullName -Match $matchState
+
     $confirmDetail = "From: $currentOU -> To: $TargetOUPath"
     $defaultAnswer = 'y'
-    if ($script:acceptAllCloseMatches) {
-        $defaultAnswer = 'y'
-        $confirmDetail = "Confirmed close match for '$FullName'. From: $currentOU -> To: $TargetOUPath"
+    if ($hasMatch) {
+        $confirmDetail = "Possible similar account(s) listed above. From: $currentOU -> To: $TargetOUPath"
     }
 
-    $approved = Confirm-UserAction -Action 'move this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail $confirmDetail -Default $defaultAnswer
+    if ($hasMatch) {
+        $approved = Confirm-UserAction -Action 'move this account' -TargetName $adUser.Name -Username $adUser.SamAccountName -Detail $confirmDetail -Default $defaultAnswer
+    }
+    else {
+        Write-Host "  OK (no similar account found) - moving without asking" -ForegroundColor Green
+        $approved = $true
+    }
 
     if (-not $approved) {
         Write-Host "  SKIPPED: you answered no. User was not moved." -ForegroundColor Yellow

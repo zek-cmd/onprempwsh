@@ -658,14 +658,18 @@ function Create-ADUserFromName {
     $hasMatch = Show-ADUserMatch -FullName $FullName -Username $Username -Match $matchState
 
     # --- Yes/no confirmation for this one person ---
-    $confirmDetail = "Target OU: $TargetOUPath"
-    $defaultAnswer = 'y'
+    # A clean record is accepted straight away: the username is free (checked above) and no
+    # similar name is in AD. The batch-level "Type 'YES'" gate before this loop still guards
+    # the whole run, so nothing is created without one deliberate confirmation.
+    # The per-person question appears ONLY when a similar account was found.
     if ($hasMatch) {
         $confirmDetail = "Possible existing account(s) listed above - check it is not the same person. Target OU: $TargetOUPath"
-        $defaultAnswer = 'n'
+        $approved = Confirm-UserAction -Action 'create a new account' -TargetName $FullName -Username $Username -Detail $confirmDetail -Default 'n'
     }
-
-    $approved = Confirm-UserAction -Action 'create a new account' -TargetName $FullName -Username $Username -Detail $confirmDetail -Default $defaultAnswer
+    else {
+        Write-Host "  Status: OK (username free, no similar account) - creating without asking" -ForegroundColor Green
+        $approved = $true
+    }
 
     if (-not $approved) {
         Write-Host "  Status: Skipped (you answered no)" -ForegroundColor Yellow

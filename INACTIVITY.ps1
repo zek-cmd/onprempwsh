@@ -700,7 +700,16 @@ if ($reportData.Count -gt 0) {
                 if ($DeleteAccounts) { $pendingActions += "delete from AD" }
                 if ($DeleteFolders) { $pendingActions += "delete its redirected folder" }
 
-                $continueAccount = Confirm-UserAction -Action ($pendingActions -join ' and ') -TargetName $account.DisplayName -Username $account.sAMAccountName -Detail ("Inactive: {0} days. Use: {1}" -f $account.DaysSinceLastLogon, $account.NeverLoggedIn) -Default 'n'
+                # --- Yes/no confirmation for this one account ---
+                # Asked only when another account with a similar name exists; a clean match continues.
+                # The batch-level "Type 'YES'" gate above still guards the whole run.
+                if ($hasMatch) {
+                    $continueAccount = Confirm-UserAction -Action ($pendingActions -join ' and ') -TargetName $account.DisplayName -Username $account.sAMAccountName -Detail ("Inactive: {0} days. Use: {1}" -f $account.DaysSinceLastLogon, $account.NeverLoggedIn) -Default 'n'
+                }
+                else {
+                    Write-ColorOutput "  OK (no similar account found) - continuing without asking: $($account.sAMAccountName)" "Green"
+                    $continueAccount = $true
+                }
 
                 if (-not $continueAccount) {
                     Write-ColorOutput "Skipped this account (you answered no): $($account.sAMAccountName)" "Yellow"
