@@ -100,6 +100,34 @@ $EnableWinRMBasicAuth  = $false        # Leave $false unless a legacy tool needs
 $EnableFirewallRules   = $true         # Write the rule list below into the GPO
 $EnableRdpInbound      = $false        # Remote Desktop rule (TCP 3389 inbound)
 
+# USB flash drive logging. The audit rows go into the GPO's audit policy
+# (Computer Configuration > Windows Settings > Security Settings > Advanced Audit
+# Policy Configuration), so every client writes the events into its own Security log.
+# setgpo.ps1 only switches the logging ON - it cannot collect events from the clients.
+# That needs the collector script (New-UsbEventCollector.ps1) on the server.
+$EnableUsbAudit        = $true         # Log every device plugged in and unplugged
+$EnableUsbFileAccess   = $false        # Also log file reads/writes on removable disks (VERY noisy)
+$EnableUsbDriverLog    = $true         # Turn on the USB driver log (holds the serial numbers)
+
+$AuditSettings = @(
+    @{
+        Subcategory = 'Plug and Play Events'
+        Guid        = '{0CCE9248-69AE-11D9-BED3-505054503030}'
+        Setting     = 'Success'      # 1 = Success, 2 = Failure, 3 = Success and Failure
+        Value       = 1
+        What        = 'device connected / disconnected - Security log event 6416'
+        Enabled     = $EnableUsbAudit
+    }
+    @{
+        Subcategory = 'Removable Storage'
+        Guid        = '{0CCE9245-69AE-11D9-BED3-505054503030}'
+        Setting     = 'Success and Failure'
+        Value       = 3
+        What        = 'each file opened on a removable disk - events 4656 / 4663'
+        Enabled     = $EnableUsbFileAccess
+    }
+)
+
 # Waits for SYSVOL to reach the other domain controllers (0 = do not wait)
 $SysvolWaitSeconds     = 90
 
@@ -209,9 +237,17 @@ $ComputerPolicySettings = @(
         Value    = 1
         Enabled  = $EnableWinRMBasicAuth
     }
+    @{
+        Setting  = 'USB driver log: record each plug and unplug (with the serial number)'
+        Key      = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\Microsoft-Windows-DriverFrameworks-UserMode/Operational'
+        ValueName = 'Enabled'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $EnableUsbDriverLog
+    }
     # NOTE: the locked-session display name and the logon banner title/text are NOT in
     # this list. They are Security Options, so they are written into GptTmpl.inf in
-    # step 4 - see the comment there.
+    # step 5 - see the comment there.
 )
 
 # ============================================================================
@@ -243,6 +279,7 @@ $RegistryMachineCSE = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48A
 $FirewallMachineCSE = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{B05566AC-FE9C-4368-BE01-7A4CBB6CBA11}]"
 $RegistryUserCSE    = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F73-3407-48AE-BA88-E8213C6761F1}]"
 $SecurityMachineCSE = "[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]"
+$AuditMachineCSE    = "[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{F3CCC681-B74C-4060-9F26-CD84525DCA2A}]"
 
 $SidAuthenticatedUsers = "S-1-5-11"
 
@@ -440,6 +477,52 @@ function Read-GptTmplLines {
     return @($Lines)
 }
 
+function Set-AuditCsvRow {
+    # Merges one Advanced Audit Policy row into the GPO's audit.csv, leaving every
+    # other row exactly as it was. Audit.csv is always UTF-16 with a BOM and, apart
+    # from the header, holds lines such as:
+    #   ,System,Plug and Play Events,{GUID},Success,,1
+    # The empty machine-name field and the GUID are both accepted by Windows, so the
+    # row works on every client whatever its computer name.
+    param(
+        [string]$Path,
+        [string]$Subcategory,
+        [string]$Guid,
+        [string]$Setting
+    )
+
+    $Header = 'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting,Setting Value'
+    $Lines = @()
+    if (Test-Path -LiteralPath $Path) {
+        $Text = ""
+        try { $Text = [System.IO.File]::ReadAllText($Path) } catch { $Text = "" }
+        $Lines = @($Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    if ($Lines.Count -eq 0) { $Lines = @($Header) }
+
+    $NewRow = ",System,$Subcategory,$Guid,$Setting,,$(if ($Setting -eq 'Success') { 1 } elseif ($Setting -eq 'Failure') { 2 } else { 3 })"
+
+    # Replace an existing row for the same subcategory, otherwise append.
+    $Out = @($Lines[0])
+    $Replaced = $false
+    for ($i = 1; $i -lt $Lines.Count; $i++) {
+        $Fields = $Lines[$i] -split ','
+        $IsSame = $false
+        if ($Fields.Count -ge 4) {
+            $IsSame = ($Fields[2].Trim() -eq $Subcategory) -or
+                      ($Fields[3].Trim() -eq $Guid)
+        }
+        if ($IsSame) { $Out += $NewRow; $Replaced = $true } else { $Out += $Lines[$i] }
+    }
+    if (-not $Replaced) { $Out += $NewRow }
+
+    $Directory = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $Directory)) { New-Item -Path $Directory -ItemType Directory -Force | Out-Null }
+    $Encoding = New-Object System.Text.UnicodeEncoding($false, $true)
+    [System.IO.File]::WriteAllText($Path, (($Out -join "`r`n") + "`r`n"), $Encoding)
+    return ($Out.Count -gt 1)
+}
+
 function Add-GpoClientSideExtension {
     # Registers a client-side extension on the GPO object in Active Directory so the
     # client knows it must run that extension for this policy.
@@ -492,7 +575,7 @@ try {
 
     Write-Info "Detected: domain '$DomainFQDN' (NetBIOS '$DomainNetBIOS')"
 
-    Write-Step "1/6  Existing GPO"
+    Write-Step "1/7  Existing GPO"
     if ([string]::IsNullOrWhiteSpace($GPOName)) { $GPOName = Select-ExistingGpo }
 
     $GPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
@@ -541,7 +624,7 @@ try {
     # ========================================================================
     # 2. SHOW THE PLAN, THEN ASK
     # ========================================================================
-    Write-Step "2/6  Settings this script will write into '$GPOName'"
+    Write-Step "2/7  Settings this script will write into '$GPOName'"
     Write-Host "  User Configuration:" -ForegroundColor White
     foreach ($S in $UserPolicySettings) {
         if ($S.Enabled) { Write-Info ("[set]   {0}  ({1}\{2}={3})" -f $S.Setting, $S.Key, $S.ValueName, $S.Value) }
@@ -566,6 +649,16 @@ try {
     }
     else { Write-Info "[skip]  Interactive logon: message title and text" }
     if ($EnableFirewallRules) { Write-Info ("[set]   {0} firewall rules for group '{1}' (domain profile only)" -f @($FirewallRules | Where-Object { $_.Enabled }).Count, $FirewallGroupName) }
+    Write-Host "  Audit Policy (audit.csv):" -ForegroundColor White
+    $AuditOn = @($AuditSettings | Where-Object { $_.Enabled })
+    if ($AuditOn.Count -gt 0) {
+        foreach ($Audit in $AuditOn) {
+            Write-Info ("[set]   {0} = {1}  ({2})" -f $Audit.Subcategory, $Audit.Setting, $Audit.What)
+        }
+    }
+    else { Write-Info "[skip]  USB plug / unplug auditing" }
+    if ($EnableUsbDriverLog) { Write-Info "[set]   USB driver log switched on (plug and unplug with device serial number)" }
+    else { Write-Info "[skip]  USB driver log" }
 
     Write-Host ""
     if (-not (Read-YesNo -Prompt "Apply these settings to the GPO '$GPOName'?")) {
@@ -575,7 +668,7 @@ try {
     # ========================================================================
     # 3. REGISTRY POLICIES (registry.pol through the Group Policy cmdlets)
     # ========================================================================
-    Write-Step "3/6  Registry policies"
+    Write-Step "3/7  Registry policies"
 
     function Set-OnePolicySetting {
         param($Definition)
@@ -607,9 +700,54 @@ try {
     }
 
     # ========================================================================
-    # 4. SECURITY POLICY ENTRIES (merge into GptTmpl.inf, keep everything else)
+    # 4. AUDIT POLICY: USB PLUG / UNPLUG LOGGING (audit.csv)
     # ========================================================================
-    Write-Step "4/6  Security policy entries in GptTmpl.inf"
+    Write-Step "4/7  Audit policy: USB plug and unplug logging (audit.csv)"
+    # The GPO's audit policy lives in Machine\Microsoft\Windows NT\Audit\audit.csv
+    # and is applied by the Audit Policy client-side extension. Full details in
+    # 'Advanced Audit Policy Configuration', NOT in GptTmpl.inf - lines written into
+    # the security template for these subcategories are accepted by secedit and then
+    # silently ignored, which would look like 'settings saved but no events'.
+    $AuditCsvPath = Join-Path (Join-Path $SysvolGpo "Machine") "Microsoft\Windows NT\Audit\audit.csv"
+    $AuditChanged = $false
+    if (@($AuditSettings | Where-Object { $_.Enabled }).Count -gt 0) {
+        foreach ($Audit in $AuditSettings) {
+            if (-not $Audit.Enabled) {
+                Write-Info "skipped by config: $($Audit.Subcategory) audit"
+                continue
+            }
+            try {
+                Set-AuditCsvRow -Path $AuditCsvPath -Subcategory $Audit.Subcategory -Guid $Audit.Guid -Setting $Audit.Setting | Out-Null
+                Write-Ok "audit on: $($Audit.Subcategory) = $($Audit.Setting)  [$($Audit.What)]"
+                $AuditChanged = $true
+                $Script:ResultCounts.Changed++
+            }
+            catch {
+                Write-Warn "FAILED: $($Audit.Subcategory) audit - $($_.Exception.Message)"
+                $Script:ResultCounts.Failed++
+            }
+        }
+        if ($AuditChanged) {
+            # Read the file back and prove every row we own is there and well formed.
+            # It is NOT applied to this server: auditpol /restore would change the
+            # local machine's own audit policy, which nobody asked for.
+            $ReadBack = @(Get-Content -LiteralPath $AuditCsvPath)
+            $Missing = @($AuditOn | Where-Object {
+                $Name = $_.Subcategory
+                -not ($ReadBack | Where-Object { $_ -match [regex]::Escape(",$Name,") })
+            })
+            if ($Missing.Count -eq 0) { Write-Ok "audit.csv written and read back cleanly ($AuditCsvPath)." }
+            else { Write-Warn "audit.csv is missing rows for: $(($Missing | ForEach-Object { $_.Subcategory }) -join ', ')" }
+        }
+    }
+    else {
+        Write-Info "USB auditing switched off in the configuration - nothing written."
+    }
+
+    # ========================================================================
+    # 5. SECURITY POLICY ENTRIES (merge into GptTmpl.inf, keep everything else)
+    # ========================================================================
+    Write-Step "5/7  Security policy entries in GptTmpl.inf"
     $GptTmplPath = Join-Path (Join-Path $SysvolGpo "Machine") "Microsoft\Windows NT\SecEdit\GptTmpl.inf"
     $SecEditDir  = Split-Path -Parent $GptTmplPath
     $GptChanged  = $false
@@ -734,9 +872,9 @@ try {
     }
 
     # ========================================================================
-    # 5. FIREWALL RULES INSIDE THE GPO
+    # 6. FIREWALL RULES INSIDE THE GPO
     # ========================================================================
-    Write-Step "5/6  Firewall rules in the GPO"
+    Write-Step "6/7  Firewall rules in the GPO"
     $FirewallChanged = 0
     if ($EnableFirewallRules) {
         # The firewall cmdlets take a policy store written as '<FQDN domain>\<GPO name>'
@@ -839,16 +977,16 @@ try {
             }
         }
         # The firewall cmdlets bump the GPO version in Active Directory themselves,
-        # so nothing is added here - step 6 only brings GPT.INI back in line.
+        # so nothing is added here - step 7 only brings GPT.INI back in line.
     }
     else {
         Write-Info "Firewall baseline switched off in the configuration - nothing written."
     }
 
     # ========================================================================
-    # 6. CSE REGISTRATION, VERSION BUMP AND GPT.INI
+    # 7. CSE REGISTRATION, VERSION BUMP AND GPT.INI
     # ========================================================================
-    Write-Step "6/6  Client-side extensions, GPO version and SYSVOL"
+    Write-Step "7/7  Client-side extensions, GPO version and SYSVOL"
     $GpoDn = "CN=$GPOGuid,CN=Policies,CN=System,$DomainDN"
     $GpoAdsi = [ADSI]"LDAP://$GpoDn"
 
@@ -860,6 +998,13 @@ try {
     if ($GptChanged) {
         if (Add-GpoClientSideExtension -GpoAdsi $GpoAdsi -Property 'gPCMachineExtensionNames' `
                 -Cse $SecurityMachineCSE -Label 'Security policy (GptTmpl.inf)') { $CseChanged = $true }
+        $Script:MachineVersionBump += 1
+    }
+    if ($AuditChanged) {
+        # Without this extension the client never reads audit.csv, so the GPO would
+        # look correct and no USB events would ever appear.
+        if (Add-GpoClientSideExtension -GpoAdsi $GpoAdsi -Property 'gPCMachineExtensionNames' `
+                -Cse $AuditMachineCSE -Label 'Audit policy (Advanced Audit Policy Configuration)') { $CseChanged = $true }
         $Script:MachineVersionBump += 1
     }
     # Registry policies also need the Registry extension; add it only if it is missing
@@ -943,6 +1088,11 @@ try {
     Write-Info "6. Security policy: run 'net accounts' - 'Logon hours / logon limit' section shows it; walk 'secpol.msc' for the cache setting."
     Write-Info "7. Lock the screen and sign out: the banner title/text appear, and only the display name is shown for a locked session."
     Write-Info "8. In the GPO itself: Security Options lists the banner and 'Interactive logon: Display user information when the session is locked' as set, not 'Not Defined'."
+    if ($AuditChanged) {
+        Write-Info "9. USB logging: plug a flash drive into a client, wait a minute, then open Event Viewer > Windows Logs > Security and look for event 6416 (device connected / disconnected)."
+        Write-Info "10. The serial number is in Event Viewer > Applications and Services Logs > Microsoft > Windows > DriverFrameworks-UserMode > Operational (events 2003 / 2100 / 2102)."
+        Write-Info "11. Nothing is collected centrally yet - run New-UsbEventCollector.ps1 ONCE on this server to pull the events from every client into one log."
+    }
     if ($Script:ResultCounts.Failed -gt 0) {
         Write-Warn "$($Script:ResultCounts.Failed) setting(s) could not be written - see the !! lines above."
     }
