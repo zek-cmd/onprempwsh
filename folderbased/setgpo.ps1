@@ -86,6 +86,36 @@ $ProfileCleanupDays    = 30            # How old a profile must be before deleti
 # > Local Policies > Security Options). All three are Security Options, so all three go
 # into GptTmpl.inf: that is the only place GPMC's Security Options page reads them from.
 # Written as registry policy values they showed as 'Not Defined' on that page.
+# Desktop / personalization locks (Administrative Templates > Control Panel >
+# Personalization). All of these are USER policies.
+$DisableDesktopIconChange = $true      # Prevent changing desktop icons
+$DisableMousePointerChange = $true     # Prevent changing mouse pointers
+$DisableScreenSaverChange = $true      # Prevent changing screen saver
+$DisableSoundChange    = $true         # Prevent changing sounds
+$DisableColorSchemeChange = $true      # Prevent changing color scheme
+$DisableThemeChange    = $true         # Prevent changing theme (Themes tab is hidden)
+$DisableVisualStyleChange = $true      # Prevent changing visual style for windows and buttons
+$DisableFontSizeChange = $true         # Prohibit selection of visual style font size
+$DisableScreenSaver    = $true         # 'Enable screen saver' = Disabled (screen saver off)
+
+# Windows AI / Copilot / Recall. The Copilot policy is per-user, the snapshot policy is
+# per-machine. Server 2022 has no template for either, so both are written as plain
+# registry policy values on the documented paths, which Windows 11 reads.
+$DisableCopilot        = $true         # Turn off Windows Copilot
+$DisableSnapshots      = $true         # Turn off saving snapshots for Windows (Recall)
+$DisablePrivacyOobe    = $true         # Don't launch the privacy settings question at logon
+
+# Group Policy refresh interval (Administrative Templates > System > Group Policy).
+# Microsoft's free-spread defaults: 90 minutes + up to 30 random for clients,
+# 5 minutes + up to 0 random for domain controllers.
+$SetGPRefreshInterval  = $true
+$GPRefreshMinutes      = 90            # 0-44640 minutes
+$GPRefreshOffsetMinutes = 30           # 0-1440 minutes (random spread)
+$SetGPRefreshIntervalDC = $true
+$GPRefreshMinutesDC    = 5             # 0-44640 minutes
+$GPRefreshOffsetMinutesDC = 0          # 0-1440 minutes
+$WaitForNetworkAtLogon = $true         # Always wait for the network at startup and logon
+
 $SetLockedUserDisplay  = $true         # Locked session shows ONLY the user display name
 $SetLogonBanner        = $true         # Banner shown before anybody signs in
 $LogonBannerTitle      = 'Good Day, SOFTNETIZENS!'
@@ -162,6 +192,94 @@ $UserPolicySettings = @(
         Type     = 'DWord'
         Value    = 1
         Enabled  = $DisableTaskbarChange
+    }
+    @{
+        Setting  = 'Prevent changing desktop icons'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+        ValueName = 'NoDispBackgroundPage'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableDesktopIconChange
+    }
+    @{
+        Setting  = 'Prevent changing mouse pointers'
+        Key      = 'HKCU\Software\Policies\Microsoft\Windows\Personalization'
+        ValueName = 'NoChangingMousePointers'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableMousePointerChange
+    }
+    @{
+        Setting  = 'Prevent changing screen saver'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+        ValueName = 'NoDispScrSavPage'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableScreenSaverChange
+    }
+    @{
+        Setting  = 'Prevent changing sounds'
+        Key      = 'HKCU\Software\Policies\Microsoft\Windows\Personalization'
+        ValueName = 'NoChangingSoundScheme'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableSoundChange
+    }
+    @{
+        Setting  = 'Prevent changing color scheme'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+        ValueName = 'NoColorChoice'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableColorSchemeChange
+    }
+    @{
+        Setting  = 'Prevent changing theme'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+        ValueName = 'NoThemesTab'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableThemeChange
+    }
+    @{
+        Setting  = 'Prevent changing visual style for windows and buttons'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+        ValueName = 'NoVisualStyleChoice'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableVisualStyleChange
+    }
+    @{
+        Setting  = 'Prohibit selection of visual style font size'
+        Key      = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+        ValueName = 'NoSizeChoice'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableFontSizeChange
+    }
+    @{
+        Setting  = 'Enable screen saver = Disabled (no screen saver)'
+        Key      = 'HKCU\Software\Policies\Microsoft\Windows\Control Panel\Desktop'
+        ValueName = 'ScreenSaveActive'
+        Type     = 'String'
+        Value    = '0'
+        Enabled  = $DisableScreenSaver
+    }
+    @{
+        Setting  = 'Turn off Windows Copilot'
+        Key      = 'HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot'
+        ValueName = 'TurnOffWindowsCopilot'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableCopilot
+    }
+    @{
+        Setting  = "Don't launch privacy settings experience at user logon"
+        Key      = 'HKCU\Software\Policies\Microsoft\Windows\OOBE'
+        ValueName = 'DisablePrivacyExperience'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisablePrivacyOobe
     }
 )
 
@@ -245,6 +363,50 @@ $ComputerPolicySettings = @(
         Type     = 'DWord'
         Value    = 1
         Enabled  = $EnableUsbDriverLog
+    }
+    @{
+        Setting  = "Don't launch privacy settings experience at user logon"
+        Key      = 'HKLM\Software\Policies\Microsoft\Windows\OOBE'
+        ValueName = 'DisablePrivacyExperience'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisablePrivacyOobe
+    }
+    @{
+        Setting  = 'Turn off saving snapshots for Windows (Recall)'
+        Key      = 'HKLM\Software\Policies\Microsoft\Windows\WindowsAI'
+        ValueName = 'DisableAIDataAnalysis'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $DisableSnapshots
+    }
+    @{
+        Setting  = 'Set Group Policy refresh interval for computers'
+        Key      = 'HKLM\Software\Policies\Microsoft\Windows\System'
+        Values   = @(
+            @{ Name = 'GroupPolicyRefreshTime';       Type = 'DWord'; Value = $GPRefreshMinutes },
+            @{ Name = 'GroupPolicyRefreshTimeOffset'; Type = 'DWord'; Value = $GPRefreshOffsetMinutes }
+        )
+        Show     = "every $GPRefreshMinutes minutes + up to $GPRefreshOffsetMinutes random"
+        Enabled  = $SetGPRefreshInterval
+    }
+    @{
+        Setting  = 'Set Group Policy refresh interval for domain controllers'
+        Key      = 'HKLM\Software\Policies\Microsoft\Windows\System'
+        Values   = @(
+            @{ Name = 'GroupPolicyRefreshTimeDC';       Type = 'DWord'; Value = $GPRefreshMinutesDC },
+            @{ Name = 'GroupPolicyRefreshTimeOffsetDC'; Type = 'DWord'; Value = $GPRefreshOffsetMinutesDC }
+        )
+        Show     = "every $GPRefreshMinutesDC minutes + up to $GPRefreshOffsetMinutesDC random"
+        Enabled  = $SetGPRefreshIntervalDC
+    }
+    @{
+        Setting  = 'Always wait for the network at computer startup and logon'
+        Key      = 'HKLM\Software\Policies\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        ValueName = 'SyncForegroundPolicy'
+        Type     = 'DWord'
+        Value    = 1
+        Enabled  = $WaitForNetworkAtLogon
     }
     # NOTE: the locked-session display name and the logon banner title/text are NOT in
     # this list. They are Security Options, so they are written into GptTmpl.inf in
@@ -628,12 +790,12 @@ try {
     Write-Step "2/7  Settings this script will write into '$GPOName'"
     Write-Host "  User Configuration:" -ForegroundColor White
     foreach ($S in $UserPolicySettings) {
-        if ($S.Enabled) { Write-Info ("[set]   {0}  ({1}\{2}={3})" -f $S.Setting, $S.Key, $S.ValueName, $S.Value) }
+        if ($S.Enabled) { if ($S.ContainsKey('Show')) { Write-Info ("[set]   {0}  ({1})" -f $S.Setting, $S.Show) } else { Write-Info ("[set]   {0}  ({1}\{2}={3})" -f $S.Setting, $S.Key, $S.ValueName, $S.Value) } }
         else { Write-Info ("[skip]  {0}" -f $S.Setting) }
     }
     Write-Host "  Computer Configuration:" -ForegroundColor White
     foreach ($S in $ComputerPolicySettings) {
-        if ($S.Enabled) { Write-Info ("[set]   {0}  ({1}\{2}={3})" -f $S.Setting, $S.Key, $S.ValueName, $S.Value) }
+        if ($S.Enabled) { if ($S.ContainsKey('Show')) { Write-Info ("[set]   {0}  ({1})" -f $S.Setting, $S.Show) } else { Write-Info ("[set]   {0}  ({1}\{2}={3})" -f $S.Setting, $S.Key, $S.ValueName, $S.Value) } }
         else { Write-Info ("[skip]  {0}" -f $S.Setting) }
     }
     Write-Host "  Security Policy (GptTmpl.inf):" -ForegroundColor White
@@ -677,8 +839,35 @@ try {
     function Set-OnePolicySetting {
         param($Definition)
         try {
+            # A definition can carry one value (ValueName / Type / Value) or a small
+            # list of them (Values), for policies that need two numbers at once -
+            # the Group Policy refresh intervals are the only such policy here.
+            if ($Definition.ContainsKey('Values')) {
+                $NeedsWrite = $false
+                foreach ($V in $Definition.Values) {
+                    $Current = Get-GPRegistryValue -Name $GPOName -Key $Definition.Key -ValueName $V.Name -ErrorAction SilentlyContinue
+                    if (-not $Current -or $Current.PolicyType -ne 'Registry' -or ([string]$Current.Value) -ne ([string]$V.Value)) { $NeedsWrite = $true }
+                }
+                if (-not $NeedsWrite) {
+                    Write-Info "unchanged: $($Definition.Setting)"
+                    $Script:ResultCounts.Unchanged++
+                    return
+                }
+                foreach ($V in $Definition.Values) {
+                    Set-GPRegistryValue -Name $GPOName -Key $Definition.Key -ValueName $V.Name `
+                                        -Type $V.Type -Value $V.Value | Out-Null
+                }
+                Write-Ok "set: $($Definition.Setting)  ($($Definition.Show))"
+                $Script:ResultCounts.Changed++
+                return
+            }
+
             $Current = Get-GPRegistryValue -Name $GPOName -Key $Definition.Key -ValueName $Definition.ValueName -ErrorAction SilentlyContinue
-            if ($Current -and $Current.PolicyType -eq 'Registry' -and ([string]$Current.Value) -eq ([string]$Definition.Value)) {
+            # Windows hands a REG_SZ value back with a trailing NUL, so trim it before
+            # comparing - otherwise every run would rewrite the text settings.
+            $CurrentText = if ($Current) { ([string]$Current.Value).TrimEnd([char]0) } else { '' }
+            $WantedText  = ([string]$Definition.Value).TrimEnd([char]0)
+            if ($Current -and $Current.PolicyType -eq 'Registry' -and $CurrentText -eq $WantedText) {
                 Write-Info "unchanged: $($Definition.Setting)"
                 $Script:ResultCounts.Unchanged++
                 return
