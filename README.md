@@ -39,7 +39,13 @@ A set of PowerShell scripts for managing an on-premises Windows Active Directory
 |---|---|
 | `INACTIVITY.ps1` | Finds inactive accounts and their redirected folders, writes a CSV report, and can optionally move or delete them in an interactive grid. |
 | `Find-Duplicate-AD-Names.ps1` | Read-only scan for duplicate, reordered and similar (close) display names. Saves a CSV report and shows the result in a grid. |
-| `folderbased/` | Folder redirection and lookup helpers, plus a DFS namespace setup in `folderbased/DFS_script/`. |
+| `folderbased/` | Folder redirection and lookup helpers, plus a DFS namespace setup in `folderbased/DFS_script/`. The two hardening scripts - `setgpo.ps1` and `New-UsbEventCollector.ps1` - live in here too; see the table below. |
+
+### Hardening through Group Policy
+| Script | What it does |
+|---|---|
+| `folderbased/setgpo.ps1` | Fills an **existing** GPO (it never creates one) and links it to the whole domain or one OU: blocks regedit, wallpaper changes, lock screen image changes and taskbar settings, turns off the Microsoft Store and Offline Files, stops Windows caching domain logons, turns on verbose logon messages, deletes stale user profiles after 30 days, sets the three interactive logon Security Options (locked-session display, sign-in banner title and text), turns on WinRM, writes a baseline set of firewall rules (ICMP, WinRM, DNS, NTP, web - Domain profile only) and switches on USB plug / unplug auditing. Every step previews first and asks y/n, and a second run changes nothing that is already set. Run it in Windows PowerShell 5.1 - started from PowerShell 7 it hands the run over to 5.1 itself. |
+| `folderbased/New-UsbEventCollector.ps1` | Run **once on the server** after `setgpo.ps1`. Clients each log USB plug and unplug in their own Security log (event 6416) and USB driver log; this script creates a Windows Event Collector subscription that pulls those events from every PC you name and stores them in one place, the server's **ForwardedEvents** log. It asks before replacing an existing subscription and deletes nothing. |
 
 ### Software and computers
 | Script | What it does |
@@ -62,6 +68,7 @@ Read the header comments at the top of each script before running it. Some scrip
 
 - Several scripts contain a default initial or reset password in plain text. Change it before running them in production.
 - Test on a non-production OU first.
+- The USB collector needs each client to allow this server to read its Security log (the client must run WinRM and this server's account must be able to read the log, for example through the **Event Log Readers** group). If no events arrive in `ForwardedEvents`, check that first.
 - Keep passwords, keys and CSV files with personal data out of the repository.
 
 ## Author
