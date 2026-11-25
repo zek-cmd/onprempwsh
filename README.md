@@ -39,7 +39,15 @@ A set of PowerShell scripts for managing an on-premises Windows Active Directory
 |---|---|
 | `INACTIVITY.ps1` | Finds inactive accounts and their redirected folders, writes a CSV report, and can optionally move or delete them in an interactive grid. |
 | `Find-Duplicate-AD-Names.ps1` | Read-only scan for duplicate, reordered and similar (close) display names. Saves a CSV report and shows the result in a grid. |
-| `folderbased/` | Folder redirection and lookup helpers, plus a DFS namespace setup in `folderbased/DFS_script/`. The two hardening scripts - `setgpo.ps1` and `New-UsbEventCollector.ps1` - live in here too; see the table below. |
+| `folderbased/` | Folder redirection and lookup helpers, plus a DFS namespace setup in `folderbased/DFS_script/`. The hardening scripts - `setgpo.ps1` and `New-UsbEventCollector.ps1` - live in here too; see the table below. It also holds two everyday file tools that need no domain at all: `FileSorter.ps1` and `FileLocker.ps1`. |
+
+### Sorting files and finding file locks
+These two work on any Windows PC. They do not need Active Directory.
+
+| Script | What it does |
+|---|---|
+| `folderbased/FileSorter.ps1` | Sorts the loose files of one folder into category subfolders, the way Internet Download Manager builds its download folders: **Compressed, Documents, Music, Pictures, Programs, Video, Other**. Opens the Windows "Browse for Folder" dialog when no `-Path` is given. A wide list of extensions is recognised - Windows, macOS and Linux alike - and anything unknown goes into `Other`, so no file is left behind. Existing subfolders are never touched, an existing name is never overwritten (" (1)", " (2)" is added), locked files are reported and left alone, and hidden or system files are skipped unless `-IncludeHidden` is used. Run it twice safely; `-WhatIf` shows the plan without moving anything, `-Copy` copies instead of moving, and `-Open` opens the sorted folder at the end. |
+| `folderbased/FileLocker.ps1` | Shows which programs are locking a file or a folder, using the Windows **Restart Manager** API - the same Windows helper behind "this file is in use". Opens the folder dialog, or the "Open file" dialog with `-File`, when no `-Path` is given. A folder is checked through the files inside it, because the Restart Manager works on files and refuses a bare folder path; add `-Recurse` to look in subfolders too (`-MaxFiles`, default 5000, is the safety stop for huge folders). Each locking program is listed with its process ID, name, the application name Windows reports, the way Windows sees it (window, service, console, Explorer), session, start time and program path. `-Stop` ends the locking programs, one confirmation each; nothing is stopped unless you ask. |
 
 ### Hardening through Group Policy
 | Script | What it does |
@@ -69,6 +77,7 @@ Read the header comments at the top of each script before running it. Some scrip
 - Several scripts contain a default initial or reset password in plain text. Change it before running them in production.
 - Test on a non-production OU first.
 - The USB collector needs each client to allow this server to read its Security log (the client must run WinRM and this server's account must be able to read the log, for example through the **Event Log Readers** group). If no events arrive in `ForwardedEvents`, check that first.
+- A file lock held by a kernel driver or a protected system service cannot be named by the Restart Manager, even from an elevated shell. The script says so and points to Resource Monitor (`resmon`) instead - that is a Windows limit, not a bug. A path that only *denies access* because of permissions is not a lock either.
 - Keep passwords, keys and CSV files with personal data out of the repository.
 
 ## Author
