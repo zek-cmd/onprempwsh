@@ -23,9 +23,26 @@
       - Hidden and system files are skipped, and so are desktop.ini, thumbs.db
         and .DS_Store. Use -IncludeHidden to sort them too.
       - A file that is locked or in use is reported and left where it is.
+      - In custom mode only the categories you pick are sorted; every file from
+        the other categories stays where it is, untouched.
+      - In custom mode the script then asks for the name of a root folder; the
+        category folders are made inside it, so they never mix with your files.
+        Leave the name blank to keep the category folders in the chosen folder.
 
 .PARAMETER Path
     The folder to sort. When left out, the folder dialog opens.
+
+.PARAMETER Mode
+    Default sorts every IDM category. Custom sorts only the categories you pick.
+    Left out, the script asks with a short menu, then opens a tick list.
+
+.PARAMETER Categories
+    The categories to sort, by name or by number: 'Documents, Pictures' or '2,4'.
+    Giving it turns custom mode on, so no menu and no tick list appear.
+
+.PARAMETER Container
+    Name of the root folder the category folders go inside, for example 'Sorted'.
+    Left out in custom mode, the script asks for it. Blank means no extra folder.
 
 .PARAMETER Copy
     Copy each file instead of moving it. The original folder keeps its files.
@@ -48,6 +65,15 @@
 
 .EXAMPLE
     .\FileSorter.ps1 -Path 'D:\Downloads' -Copy -Open
+
+.EXAMPLE
+    .\FileSorter.ps1 -Path 'D:\Downloads' -Mode Custom -Categories Documents, Pictures
+
+.EXAMPLE
+    .\FileSorter.ps1 -Path 'D:\Downloads' -Categories '1,3,5' -WhatIf
+
+.EXAMPLE
+    .\FileSorter.ps1 -Path 'D:\Downloads' -Mode Custom -Categories Documents -Container 'Sorted'
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -55,7 +81,11 @@ param(
     [string]$Path,
     [switch]$Copy,
     [switch]$IncludeHidden,
-    [switch]$Open
+    [switch]$Open,
+    [ValidateSet('Default', 'Custom')]
+    [string]$Mode,
+    [string[]]$Categories,
+    [string]$Container
 )
 
 $ErrorActionPreference = 'Stop'
@@ -195,7 +225,18 @@ function Show-Banner {
     $mode = if ($Copy) { 'Copy files' } else { 'Move files' }
     if ($WhatIfPreference) { $mode += '  (DRY RUN - nothing is changed)' }
     Write-ColorOutput ("   Mode    : {0}" -f $mode) 'Gray'
-    Write-ColorOutput ("   Folders : {0}" -f ($CategoryOrder -join ', ')) 'Gray'
+    Write-Host ''
+}
+
+function Show-Selection {
+    param(
+        [string[]]$Selected,
+        [string]$Container
+    )
+
+    Write-ColorOutput ("   Folders : {0}" -f ($Selected -join ', ')) 'Gray'
+    $rootText = if ([string]::IsNullOrWhiteSpace($Container)) { '(the chosen folder itself)' } else { $Container }
+    Write-ColorOutput ("   Root    : {0}" -f $rootText) 'Gray'
     Write-ColorOutput ("   Known   : {0} file extensions" -f $ExtToCategory.Count) 'Gray'
     Write-Host ''
 }
@@ -315,11 +356,332 @@ function Get-Category {
     return $UnknownCategory
 }
 
+function Get-SafeFolderName {
+    # Keeps a folder name Windows accepts, or $null when nothing usable is left.
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+
+    $clean = $Name.Trim().Trim('"').Trim()
+    if ([string]::IsNullOrWhiteSpace($clean)) { return $null }
+    if ($clean -eq '.' -or $clean -eq '..') { return $null }
+
+    foreach ($char in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $clean = $clean.Replace([string]$char, '')
+    }
+    $clean = $clean.Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($clean)) { return $null }
+    if ($clean.Length -gt 64) { $clean = $clean.Substring(0, 64).Trim().TrimEnd('.') }
+    if ([string]::IsNullOrWhiteSpace($clean)) { return $null }
+
+    return $clean
+}
+
+function Select-ContainerName {
+    # Asks for the root folder name. Returns '' for no extra folder.
+    Write-ColorOutput 'Sort into which root folder?' 'White'
+    Write-ColorOutput '  The category folders are made inside it, so they stay apart from your own folders.' 'Gray'
+    Write-ColorOutput '  Press Enter for "Sorted", or type 0 to put the categories straight in the chosen folder.' 'Gray'
+    Write-Host ''
+
+    $default = 'Sorted'
+    while ($true) {
+        try { $answer = Read-Host ('Root folder name [' + $default + ']') }
+        catch { return $default }
+
+        if ($null -eq $answer) { return $default }
+        $answer = $answer.Trim()
+
+        if ($answer -eq '0' -or $answer -ieq 'none' -or $answer -ieq 'no') { return '' }
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $default }
+
+        $safe = Get-SafeFolderName -Name $answer
+        if ([string]::IsNullOrWhiteSpace($safe)) {
+            Write-ColorOutput '  Windows cannot use that name. Try another one.' 'DarkYellow'
+            continue
+        }
+        if ($safe -ne $answer) {
+            Write-ColorOutput ("  Some characters are not allowed, so the folder will be called ""{0}""." -f $safe) 'DarkYellow'
+        }
+        return $safe
+    }
+}
+
+function Select-SortMode {
+    # Short menu: 1 = default (every category), 2 = custom (pick categories), Q = quit.
+    Write-ColorOutput 'How should the files be sorted?' 'White'
+    Write-ColorOutput ('  1  Default  - all categories ({0})' -f ($CategoryOrder -join ', ')) 'Gray'
+    Write-ColorOutput '  2  Custom   - tick the categories you want' 'Gray'
+    Write-ColorOutput '  Q  Quit     - change nothing' 'Gray'
+    Write-Host ''
+
+    while ($true) {
+        $answer = Read-Host 'Choose [1] Default, [2] Custom, [Q] Quit'
+        if ($null -eq $answer) { return 'Quit' }
+        switch ($answer.Trim().ToLowerInvariant()) {
+            '1' { return 'Default' }
+            '' { return 'Default' }
+            'd' { return 'Default' }
+            'default' { return 'Default' }
+            '2' { return 'Custom' }
+            'c' { return 'Custom' }
+            'custom' { return 'Custom' }
+            'q' { return 'Quit' }
+            'quit' { return 'Quit' }
+            default { Write-ColorOutput '  Type 1, 2 or Q.' 'DarkYellow' }
+        }
+    }
+}
+
+function Select-CategoriesMenu {
+    # Fallback for a console without a tick list: numbers or names, comma separated.
+    Write-Host ''
+    for ($i = 0; $i -lt $CategoryOrder.Count; $i++) {
+        Write-ColorOutput ('  {0,2}. {1}  ({2} extensions)' -f ($i + 1), $CategoryOrder[$i], $ExtensionMap[$CategoryOrder[$i]].Count) 'Gray'
+    }
+    Write-Host ''
+
+    while ($true) {
+        $answer = Read-Host 'Which categories? (numbers or names, comma separated, e.g. 1,2 or Documents,Pictures)'
+        if ($null -eq $answer) { return @() }
+        $resolved = Resolve-CategoryChoice -Choice $answer
+        if ($resolved.Count -gt 0) { return $resolved }
+        Write-ColorOutput ('  Nothing matched. Use 1-{0} or a name from the list.' -f $CategoryOrder.Count) 'DarkYellow'
+    }
+}
+
+function Resolve-CategoryChoice {
+    # Turns "1,3" or "Documents, Pictures" or "documents" into real category names.
+    param([string[]]$Choice)
+
+    $picked = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Choice) { return @() }
+
+    foreach ($raw in $Choice) {
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        foreach ($piece in ($raw -split '[,;\s]+')) {
+            if ([string]::IsNullOrWhiteSpace($piece)) { continue }
+
+            $number = 0
+            if ([int]::TryParse($piece, [ref]$number)) {
+                if ($number -ge 1 -and $number -le $CategoryOrder.Count) {
+                    $name = $CategoryOrder[$number - 1]
+                    if (-not $picked.Contains($name)) { $picked.Add($name) }
+                }
+                continue
+            }
+
+            foreach ($category in $CategoryOrder) {
+                if ($category -eq $piece -or $category.StartsWith($piece, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    if (-not $picked.Contains($category)) { $picked.Add($category) }
+                    break
+                }
+            }
+        }
+    }
+
+    return @($picked)
+}
+
+function Show-CategoryPicker {
+    <#
+        A real Windows tick list (CheckListBox) built from the categories, so the
+        user can tick what to sort, Click to run it or Cancel to change nothing.
+        Returns the chosen categories, $null when cancelled, or 'FALLBACK' when the
+        window could not be shown (no desktop) so the caller can use text menus.
+    #>
+    param([string[]]$PreChecked)
+
+    $pickerCode = {
+        param($Items, $PreChecked, $Colors)
+
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+
+        [System.Windows.Forms.Application]::EnableVisualStyles()
+
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = 'File Sorter - choose the folders to sort'
+        $form.StartPosition = 'CenterScreen'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.ClientSize = New-Object System.Drawing.Size(430, 430)
+        $form.TopMost = $true
+        $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+        $title = New-Object System.Windows.Forms.Label
+        $title.Text = 'Tick the folders you want, then press Sort.'
+        $title.AutoSize = $false
+        $title.Location = New-Object System.Drawing.Point(16, 12)
+        $title.Size = New-Object System.Drawing.Size(398, 20)
+        $form.Controls.Add($title)
+
+        $list = New-Object System.Windows.Forms.CheckedListBox
+        $list.Location = New-Object System.Drawing.Point(16, 38)
+        $list.Size = New-Object System.Drawing.Size(398, 300)
+        $list.CheckOnClick = $true
+        $list.IntegralHeight = $false
+        $list.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+        $list.Items.AddRange([object[]]$Items)
+        for ($i = 0; $i -lt $Items.Count; $i++) {
+            if ($PreChecked -contains $Items[$i]) {
+                $list.SetItemChecked($i, $true)
+            }
+        }
+        $form.Controls.Add($list)
+
+        $allButton = New-Object System.Windows.Forms.Button
+        $allButton.Text = 'Select all'
+        $allButton.Location = New-Object System.Drawing.Point(16, 348)
+        $allButton.Size = New-Object System.Drawing.Size(90, 28)
+        $allButton.Add_Click({ for ($i = 0; $i -lt $list.Items.Count; $i++) { $list.SetItemChecked($i, $true) } })
+        $form.Controls.Add($allButton)
+
+        $noneButton = New-Object System.Windows.Forms.Button
+        $noneButton.Text = 'Clear'
+        $noneButton.Location = New-Object System.Drawing.Point(114, 348)
+        $noneButton.Size = New-Object System.Drawing.Size(90, 28)
+        $noneButton.Add_Click({ for ($i = 0; $i -lt $list.Items.Count; $i++) { $list.SetItemChecked($i, $false) } })
+        $form.Controls.Add($noneButton)
+
+        $okButton = New-Object System.Windows.Forms.Button
+        $okButton.Text = 'Sort'
+        $okButton.Location = New-Object System.Drawing.Point(214, 388)
+        $okButton.Size = New-Object System.Drawing.Size(96, 30)
+        $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.AcceptButton = $okButton
+        $form.Controls.Add($okButton)
+
+        $cancelButton = New-Object System.Windows.Forms.Button
+        $cancelButton.Text = 'Cancel'
+        $cancelButton.Location = New-Object System.Drawing.Point(318, 388)
+        $cancelButton.Size = New-Object System.Drawing.Size(96, 30)
+        $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.CancelButton = $cancelButton
+        $form.Controls.Add($cancelButton)
+
+        $result = $form.ShowDialog()
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+
+        $checked = @($list.CheckedItems)
+        if ($checked.Count -eq 0) { return @('__NONE__') }
+        return $checked
+    }
+
+    $items = @($CategoryOrder)
+    $pre = @()
+    if ($PreChecked) { $pre = @($PreChecked) }
+
+    $apartmentState = [System.Threading.Thread]::CurrentThread.GetApartmentState()
+    if ($apartmentState -eq [System.Threading.ApartmentState]::STA) {
+        try { return (& $pickerCode $items $pre $null) }
+        catch { return 'FALLBACK' }
+    }
+
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.ApartmentState = [System.Threading.ApartmentState]::STA
+    $runspace.ThreadOptions = 'ReuseThread'
+    $runspace.Open()
+
+    $shell = [powershell]::Create()
+    $shell.Runspace = $runspace
+    [void]$shell.AddScript($pickerCode.ToString()).AddArgument($items).AddArgument($pre).AddArgument($null)
+
+    $chosen = $null
+    try {
+        $output = $shell.Invoke()
+        $list2 = New-Object System.Collections.Generic.List[string]
+        foreach ($item in $output) {
+            if ($null -ne $item) { $list2.Add([string]$item) }
+        }
+        if ($list2.Count -eq 0) { $chosen = $null }
+        elseif ($list2.Count -eq 1 -and $list2[0] -eq '__NONE__') { $chosen = @() }
+        else { $chosen = @($list2) }
+    }
+    catch {
+        return 'FALLBACK'
+    }
+    finally {
+        $shell.Dispose()
+        $runspace.Dispose()
+    }
+
+    return $chosen
+}
+
+function Select-SortCategories {
+    # Tries the tick list window first, then falls back to a numbered prompt.
+    param([string[]]$PreChecked)
+
+    $picked = Show-CategoryPicker -PreChecked $PreChecked
+    if ($picked -eq 'FALLBACK') {
+        return (Select-CategoriesMenu)
+    }
+    if ($null -eq $picked) { return $null }
+
+    $names = @($picked | Where-Object { $CategoryOrder -contains $_ })
+    if ($names.Count -eq 0) { return $null }
+    return $names
+}
+
 # ============================================
 # MAIN
 # ============================================
 
 Show-Banner
+
+# ---------- 0. Choose what to sort: every category, or a pick ----------
+$selected = @($CategoryOrder)
+$categoriesGiven = $false
+
+if (-not [string]::IsNullOrWhiteSpace($Categories) -and $Categories.Count -gt 0 -and $Categories -notcontains '') {
+    # -Categories given on the command line: custom mode, no questions asked.
+    $resolved = Resolve-CategoryChoice -Choice $Categories
+    if ($resolved.Count -eq 0) {
+        Write-ColorOutput ("None of those categories exist. Use: {0}" -f ($CategoryOrder -join ', ')) 'Red'
+        return
+    }
+    $selected = @($resolved)
+    $Mode = 'Custom'
+    $categoriesGiven = $true
+}
+elseif ([string]::IsNullOrWhiteSpace($Mode)) {
+    $Mode = Select-SortMode
+    if ($Mode -eq 'Quit') {
+        Write-Host ''
+        Write-ColorOutput 'Nothing was sorted.' 'Yellow'
+        return
+    }
+}
+
+if ($Mode -eq 'Custom' -and -not $categoriesGiven) {
+    $picked = Select-SortCategories -PreChecked $selected
+    if ($null -eq $picked -or @($picked).Count -eq 0) {
+        Write-Host ''
+        Write-ColorOutput 'No category was picked. Nothing was sorted.' 'Yellow'
+        return
+    }
+    $selected = @($picked)
+}
+
+# ---------- 0b. Name the root folder the categories go inside ----------
+$containerName = ''
+$containerGiven = $PSBoundParameters.ContainsKey('Container')
+if (-not [string]::IsNullOrWhiteSpace($Container)) {
+    $cleanContainer = Get-SafeFolderName -Name $Container
+    if ([string]::IsNullOrWhiteSpace($cleanContainer)) {
+        Write-ColorOutput ("That root folder name cannot be used: {0}" -f $Container) 'Red'
+        return
+    }
+    $containerName = $cleanContainer
+}
+elseif ($Mode -eq 'Custom' -and -not $categoriesGiven -and -not $containerGiven) {
+    # Only asked in the interactive custom flow.
+    $containerName = Select-ContainerName
+}
+
+$notSelected = @($CategoryOrder | Where-Object { $selected -notcontains $_ })
 
 # ---------- 1. Pick the folder ----------
 if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -346,7 +708,15 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
 }
 
 Write-ColorOutput ("Folder : {0}" -f $root) 'White'
+
+# The category folders go inside the chosen root folder, when one was named.
+$sortBase = $root
+if (-not [string]::IsNullOrWhiteSpace($containerName)) {
+    $sortBase = Join-Path $root $containerName
+}
+
 Write-Host ''
+Show-Selection -Selected $selected -Container $containerName
 
 # ---------- 2. Collect the loose files ----------
 $getFiles = @{
@@ -368,6 +738,20 @@ if ($files.Count -eq 0) {
     Write-ColorOutput 'No loose files to sort in this folder. Nothing was changed.' 'Yellow'
     if ($Open) { Invoke-Item -LiteralPath $root }
     return
+}
+
+if (-not $WhatIfPreference -and -not [string]::IsNullOrWhiteSpace($containerName)) {
+    if (-not (Test-Path -LiteralPath $sortBase -PathType Container)) {
+        try {
+            New-Item -Path $sortBase -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            Write-ColorOutput ("Root folder made: {0}" -f $sortBase) 'Gray'
+            Write-Host ''
+        }
+        catch {
+            Write-ColorOutput ("The root folder could not be created: {0}" -f $_.Exception.Message) 'Red'
+            return
+        }
+    }
 }
 
 # ---------- 3. Sort ----------
@@ -396,8 +780,13 @@ foreach ($file in $files) {
     }
 
     $category = Get-Category -Extension $file.Extension
+    if ($selected -notcontains $category) {
+        # Not one of the picked categories: leave the file exactly where it is.
+        $skippedCount++
+        continue
+    }
     $color = $CategoryColor[$category]
-    $destinationFolder = Join-Path $root $category
+    $destinationFolder = Join-Path $sortBase $category
 
     try {
         if ($PSCmdlet.ShouldProcess($file.FullName, ('{0} to [{1}]' -f $actionName, $category))) {
@@ -444,7 +833,7 @@ foreach ($category in $CategoryOrder) {
     $number = $counts[$category]
     if ($number -eq 0) { continue }
 
-    $folderPath = Join-Path $root $category
+    $folderPath = Join-Path $sortBase $category
     $sizeText = ''
     if (Test-Path -LiteralPath $folderPath) {
         try {
@@ -461,6 +850,9 @@ Write-Host ''
 Write-ColorOutput ('  {0}   : {1}' -f $verb, $movedCount) 'Green'
 Write-ColorOutput ('  Skipped : {0}' -f $skippedCount) 'Gray'
 Write-ColorOutput ('  Failed  : {0}' -f $failedCount) $(if ($failedCount -gt 0) { 'Red' } else { 'Gray' })
+if ($notSelected.Count -gt 0) {
+    Write-ColorOutput ('  Not sorted (category not picked): {0}' -f ($notSelected -join ', ')) 'Gray'
+}
 
 if ($WhatIfPreference) {
     Write-Host ''
