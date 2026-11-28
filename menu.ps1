@@ -201,8 +201,6 @@ $Catalog = @(
     New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\namesfolderlookup.ps1' -About 'Match names.csv with the redirected user folders' -Risk Danger -SupportsWhatIf
     New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\FileSorter.ps1' -About 'Sort a folder into IDM-style category folders' -Risk Write -SupportsWhatIf
     New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\FileLocker.ps1' -About 'Show which program is locking a file or folder' -Risk Read -SupportsWhatIf
-    New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\extract.ps1' -About 'Extract .xlsx/.docx files from user folders' -Risk Write
-    New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\delete.ps1' -About 'Delete the extracted .xlsx/.docx files' -Risk Danger
     New-MenuItem -Group 'Reports and cleanup' -File 'folderbased\folderredirection.ps1' -About 'Reset folder ownership and permissions' -Risk Danger
 
     New-MenuItem -Group 'Software and computers' -File 'SOFTWAREDEPLOY.ps1' -About 'Create and share a GPO software folder' -Risk Write
